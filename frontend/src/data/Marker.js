@@ -1,12 +1,17 @@
 import {HnHMaxZoom, ImageIcon} from "../utils/LeafletCustomTypes";
 import * as L from "leaflet";
 
-function detectType(name) {
-    if (name === "gfx/invobjs/small/bush" || name === "gfx/invobjs/small/bumling" || name === "gfx/terobjs/mm/gianttoad") return "quest";
-    if (name === "gfx/terobjs/mm/thingwall") return "thingwall";
-    if (name === "custom") return "custom";
-    let idx = name.lastIndexOf("/");
-    return idx === -1 ? name : name.substring(name.lastIndexOf("/") + 1);
+function detectType(image, markerName) {
+    // Caves go by their marker name rather than their image: the client reports
+    // them under assorted images, and the map has always drawn them with the
+    // cave icon, so they belong in one category rather than scattered across
+    // several.
+    if (markerName && markerName.toLowerCase() === "cave") return "cave";
+    if (image === "gfx/invobjs/small/bush" || image === "gfx/invobjs/small/bumling" || image === "gfx/terobjs/mm/gianttoad") return "quest";
+    if (image === "gfx/terobjs/mm/thingwall") return "thingwall";
+    if (image === "custom") return "custom";
+    let idx = image.lastIndexOf("/");
+    return idx === -1 ? image : image.substring(idx + 1);
 }
 
 export class Marker {
@@ -15,7 +20,7 @@ export class Marker {
         this.position = markerData.position;
         this.name = markerData.name;
         this.image = markerData.image;
-        this.type = detectType(this.image);
+        this.type = detectType(this.image, this.name);
         this.marker = false;
         this.text = this.name;
         this.value = this.id;

@@ -73,6 +73,29 @@
           </v-list-item-content>
         </v-list-item>
 
+        <!-- PER-TYPE MARKER VISIBILITY -->
+        <v-list-item v-if="showMarkers && markerCategories.length">
+          <v-list-item-content>
+            <v-list-item-title>
+              <div class="cat-head">
+                <label class="title">Marker types</label>
+                <span>
+                  <v-btn class="short-btn" x-small @click="showAllCategories">all</v-btn>
+                  <v-btn class="short-btn" x-small @click="hideAllCategories">none</v-btn>
+                </span>
+              </div>
+              <div class="cat-list">
+                <label v-for="c in markerCategories" :key="c.name" class="cat-row">
+                  <input type="checkbox" :checked="categoryShown(c.name)"
+                         @change="toggleCategory(c.name)">
+                  <span class="cat-name">{{ c.name }}</span>
+                  <span class="cat-count">{{ c.count }}</span>
+                </label>
+              </div>
+            </v-list-item-title>
+          </v-list-item-content>
+        </v-list-item>
+
         <!-- TO ANY MARKER -->
         <v-list-item>
           <v-list-item-content>
@@ -294,22 +317,65 @@ import {UniqueList} from "../data/UniqueList";
 import {Character} from "../data/Character";
 import VueContext from 'vue-context';
 
+// Sidebar state is remembered per browser, so a view someone has set up for
+// themselves survives a reload.
+const PREFS_KEY = 'hnhmap.viewPrefs';
+
+const TOGGLE_PREFS = [
+  'showGridCoordinates', 'showMarkers', 'showQuests', 'showQuestTooltips',
+  'showThingwalls', 'showThingwallTooltips', 'showPlayers', 'showPlayerTooltips'
+];
+
+// Read before the component exists, so restored values are the initial state and
+// no watcher fires against a map that has not been built yet.
+function loadPrefs() {
+  const prefs = {hidden: []};
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(PREFS_KEY) || '{}');
+    // Only recognised keys are adopted: a stale or hand-edited entry should not
+    // be able to put the component into a state it has no UI for.
+    TOGGLE_PREFS.forEach(k => {
+      if (typeof stored[k] === 'boolean') prefs[k] = stored[k];
+    });
+    if (Array.isArray(stored.hidden)) {
+      prefs.hidden = stored.hidden.filter(c => typeof c === 'string');
+    }
+  } catch (e) {
+    // Unreadable or blocked storage just means defaults.
+  }
+  return prefs;
+}
+
+function savePrefs(prefs) {
+  try {
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch (e) {
+    // Private browsing or a full quota: preferences simply do not persist.
+  }
+}
+
 export default {
   name: "MapView",
   components: {
     VueContext,
   },
   data: function () {
+    const saved = loadPrefs();
+    const pick = (key, fallback) => saved[key] === undefined ? fallback : saved[key];
     return {
       mini: true,
-      showGridCoordinates: false,
-      showMarkers: false,
-      showQuests: false,
-      showQuestTooltips: false,
-      showThingwalls: true,
-      showThingwallTooltips: true,
-      showPlayers: true,
-      showPlayerTooltips: true,
+      showGridCoordinates: pick('showGridCoordinates', false),
+      showMarkers: pick('showMarkers', false),
+      showQuests: pick('showQuests', false),
+      showQuestTooltips: pick('showQuestTooltips', false),
+      showThingwalls: pick('showThingwalls', true),
+      showThingwallTooltips: pick('showThingwallTooltips', true),
+      showPlayers: pick('showPlayers', true),
+      showPlayerTooltips: pick('showPlayerTooltips', true),
+      // Hidden rather than shown, so a marker type that turns up later is
+      // visible by default instead of silently suppressed.
+      hiddenCategories: saved.hidden,
+      markerCategories: [],
       expandControlPanel: true,
 
       trackingCharacterId: -1,
@@ -319,7 +385,6 @@ export default {
       // markersCache: [],
       allMarks: [],
       otherMarks: [],
-      marksCategories: [],
       thingMarks: [],
       questMarks: [],
       players: [],
@@ -339,6 +404,17 @@ export default {
       }
     }
   },
+  computed: {
+    // Watched as a whole so persistence lives in one place rather than in every
+    // toggle's handler.
+    viewPrefs() {
+      const prefs = {hidden: this.hiddenCategories};
+      TOGGLE_PREFS.forEach(k => {
+        prefs[k] = this[k];
+      });
+      return prefs;
+    }
+  },
   watch: {
     showGridCoordinates(value) {
       console.log("showGridCoordinates", value);
@@ -348,46 +424,28 @@ export default {
         this.coordLayer.setOpacity(0);
       }
     },
-    showMarkers(value) {
-      console.log("showMarkers", value);
-      if (!value) {
-        this.otherMarks.forEach(it => it.remove(this));
-      } else {
-        this.otherMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => it.add(this));
-      }
+    // Every marker toggle routes through one place, so the category
+    // checkboxes and the category switches cannot disagree about what is drawn.
+    showMarkers() {
+      this.applyMarkerVisibility();
     },
-    showThingwalls(value) {
-      console.log("showThingwalls", value);
-      if (!value) {
-        this.thingMarks.forEach(it => it.remove(this));
-      } else {
-        this.thingMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-          it.add(this);
-          it.tooltip(this.showThingwallTooltips);
-        });
-      }
+    showThingwalls() {
+      this.applyMarkerVisibility();
     },
-    showQuests(value) {
-      console.log("showQuests", value);
-      if (!value) {
-        this.questMarks.forEach(it => it.remove(this));
-      } else {
-        this.questMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-          it.add(this);
-          it.tooltip(this.showQuestTooltips);
-        });
-      }
+    showQuests() {
+      this.applyMarkerVisibility();
     },
-    showPlayers(value) {
-      console.log("showPlayers", value);
-      if (!value) {
-        this.characters.getElements().forEach(it => it.remove(this));
-      } else {
-        this.characters.getElements().filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-          it.add(this);
-          it.tooltip(this.showPlayers);
-        });
-      }
+    hiddenCategories() {
+      this.applyMarkerVisibility();
+    },
+    viewPrefs: {
+      handler(prefs) {
+        savePrefs(prefs);
+      },
+      deep: true
+    },
+    showPlayers() {
+      this.applyCharacterVisibility();
     },
     showThingwallTooltips(value) {
       console.log("showThingwallTooltips", value);
@@ -431,64 +489,10 @@ export default {
       }
     },
     overlayMap(value) {
-      console.log("overlayMap");
-      if (value) {
-        this.overlayLayer.map = value.ID;
-        this.overlayLayer.redraw();
-        if (this.showMarkers) {
-          this.otherMarks.forEach(it => it.remove(this));
-          this.otherMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => it.add(this));
-        }
-        if (this.showThingwalls) {
-          this.thingMarks.forEach(it => it.remove(this));
-          this.thingMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showThingwallTooltips);
-          });
-        }
-        if (this.showQuests) {
-          this.questMarks.forEach(it => it.remove(this));
-          this.questMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showQuestTooltips);
-          });
-        }
-        if (this.showPlayers) {
-          this.characters.getElements().forEach(it => it.remove(this));
-          this.characters.getElements().filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showPlayerTooltips);
-          });
-        }
-      } else {
-        this.overlayLayer.map = -1;
-        this.overlayLayer.redraw();
-        if (this.showMarkers) {
-          this.otherMarks.forEach(it => it.remove(this));
-          this.otherMarks.filter(it => it.map === this.mapid).forEach(it => it.add(this));
-        }
-        if (this.showThingwalls) {
-          this.thingMarks.forEach(it => it.remove(this));
-          this.thingMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showThingwallTooltips);
-          });
-        }
-        if (this.showQuests) {
-          this.questMarks.forEach(it => it.remove(this));
-          this.questMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showPlayerTooltips);
-          });
-        }
-        if (this.showPlayers) {
-          this.characters.getElements().forEach(it => it.remove(this));
-          this.characters.getElements().filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showPlayerTooltips);
-          });
-        }
-      }
+      this.overlayLayer.map = value ? value.ID : -1;
+      this.overlayLayer.redraw();
+      this.applyMarkerVisibility();
+      this.applyCharacterVisibility();
     },
     selectedMarker(value) {
       //selectedMap
@@ -790,10 +794,15 @@ export default {
           this.questMarks.push(it);
         else
           this.otherMarks.push(it);
-
-        if (!this.marksCategories.includes(it.type))
-          this.marksCategories.push(it.type);
       });
+
+      // Thingwalls and quest givers are left out: they have their own switches
+      // above, and listing them twice would give two controls for one thing.
+      const counts = {};
+      this.otherMarks.forEach(it => {
+        counts[it.type] = (counts[it.type] || 0) + 1;
+      });
+      this.markerCategories = Object.keys(counts).sort().map(name => ({name, count: counts[name]}));
     },
     updateCharacters(charactersData) {
       this.characters.update(charactersData.map(it => {
@@ -838,15 +847,63 @@ export default {
       reportMissingIcon(img.getAttribute('src'));
       img.src = UnknownIconUrl;
     },
-    // Whether a marker belongs on screen right now: on a visible map layer, and
-    // in a category the user has not switched off.
+    // Whether a marker belongs on screen right now: on a visible map layer, in a
+    // group that is switched on, and of a type the user has not hidden.
     markerVisible(marker) {
       if (marker.map !== this.mapid && marker.map !== this.overlayLayer.map) {
         return false;
       }
+      // Thingwalls and quest givers keep their own switches; the per-type
+      // checkboxes below cover everything else.
       if (marker.type === "thingwall") return this.showThingwalls;
       if (marker.type === "quest") return this.showQuests;
+      if (this.hiddenCategories.indexOf(marker.type) !== -1) return false;
       return this.showMarkers;
+    },
+    // The single place that decides what is on the map. Every toggle calls this
+    // rather than adding and removing markers itself.
+    applyMarkerVisibility() {
+      this.markers.getElements().forEach(marker => {
+        const wanted = this.markerVisible(marker);
+        const shown = Boolean(marker.marker);
+        if (wanted && !shown) {
+          marker.add(this);
+          marker.tooltip(this.markerTooltipState(marker));
+        } else if (!wanted && shown) {
+          marker.remove(this);
+        }
+      });
+    },
+    // Characters only ever draw on the map the viewer is looking at — Character
+    // itself refuses to add otherwise — so the overlay layer is not consulted.
+    applyCharacterVisibility() {
+      this.characters.getElements().forEach(character => {
+        const wanted = this.showPlayers && character.map === this.mapid;
+        const shown = Boolean(character.marker);
+        if (wanted && !shown) {
+          character.add(this);
+          character.tooltip(this.showPlayerTooltips);
+        } else if (!wanted && shown) {
+          character.remove(this);
+        }
+      });
+    },
+    toggleCategory(name) {
+      const idx = this.hiddenCategories.indexOf(name);
+      if (idx === -1) {
+        this.hiddenCategories.push(name);
+      } else {
+        this.hiddenCategories.splice(idx, 1);
+      }
+    },
+    categoryShown(name) {
+      return this.hiddenCategories.indexOf(name) === -1;
+    },
+    showAllCategories() {
+      this.hiddenCategories = [];
+    },
+    hideAllCategories() {
+      this.hiddenCategories = this.markerCategories.map(c => c.name);
     },
     markerTooltipState(marker) {
       if (marker.type === "thingwall") return this.showThingwallTooltips;
@@ -887,41 +944,21 @@ export default {
       });
     },
     changeMap(mapid) {
-      if (mapid !== this.mapid) {
-        this.mapid = mapid;
-        this.layer.map = this.mapid;
-        this.layer.redraw();
-        this.overlayLayer.map = -1;
-        this.overlayLayer.redraw();
-        if (this.showMarkers) {
-          this.otherMarks.forEach(it => it.remove(this));
-          this.otherMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(false);
-          });
-        }
-        if (this.showThingwalls) {
-          this.thingMarks.forEach(it => it.remove(this));
-          this.thingMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showThingwallTooltips);
-          });
-        }
-        if (this.showQuests) {
-          this.questMarks.forEach(it => it.remove(this));
-          this.questMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showQuestTooltips);
-          });
-        }
-        if (this.showPlayers) {
-          this.characters.getElements().forEach(it => it.remove(this));
-          this.characters.getElements().filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showPlayerTooltips);
-          });
-        }
+      // Route parameters arrive as strings, so opening /grid/2/... directly used
+      // to leave mapid as "2" while every marker, character and tile update
+      // carries a number. The strict comparisons then never matched and the map
+      // came up empty — the long-standing "refresh does not update the map".
+      mapid = Number(mapid);
+      if (!Number.isFinite(mapid) || mapid === this.mapid) {
+        return;
       }
+      this.mapid = mapid;
+      this.layer.map = this.mapid;
+      this.layer.redraw();
+      this.overlayLayer.map = -1;
+      this.overlayLayer.redraw();
+      this.applyMarkerVisibility();
+      this.applyCharacterVisibility();
     }
   }
 }
@@ -984,6 +1021,51 @@ export default {
   min-height: auto !important;
   height: auto !important;
   text-transform: none !important;
+}
+
+.cat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+/* The list grows with the number of marker types in play, so it scrolls rather
+   than pushing the rest of the sidebar off screen. */
+.cat-list {
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 4px 0;
+}
+
+.cat-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 2px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.cat-row input {
+  /* Vuetify hides bare checkboxes; these are deliberately plain. */
+  opacity: 1 !important;
+  position: static !important;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.cat-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cat-count {
+  opacity: 0.6;
+  font-size: 11px;
 }
 
 .v-list {
