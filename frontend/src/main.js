@@ -5,15 +5,10 @@ import App from './App.vue'
 import VueResource from "vue-resource"
 import VModal from 'vue-js-modal'
 import router from './router'
-import {HnHMaxZoom} from "./utils/LeafletCustomTypes";
 import {Server} from "miragejs";
 import vuetify from './plugins/vuetify';
 
 export const API_ENDPOINT = `api`;
-
-export function getTileUrl(x, y, zoom) {
-    return `grids/${HnHMaxZoom - zoom}/${x}_${y}.png`
-}
 
 Vue.config.productionTip = false;
 

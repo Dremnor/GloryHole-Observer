@@ -49,6 +49,12 @@ var (
 		}
 		return 8080
 	}(), "Port to listen on")
+	// Merging two maps rewrites the coordinates of every grid in the merged map
+	// and cannot be undone, so a single stray grid should not trigger one. A
+	// client genuinely crossing between two mapped areas reports several
+	// overlapping grids within a request or two.
+	mergeMinOverlap = flag.Int("merge-min-overlap", 2,
+		"how many overlapping grids must agree before two maps are merged automatically (1 restores the old behaviour)")
 )
 
 func faviconHandler(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +121,7 @@ func main() {
 	http.HandleFunc("/admin/setTitle", m.setTitle)
 	http.HandleFunc("/admin/rebuildZooms", m.rebuildZooms)
 	http.HandleFunc("/admin/export", m.export)
+	http.HandleFunc("/admin/backup", m.backup)
 	http.HandleFunc("/admin/merge", m.merge)
 	http.HandleFunc("/admin/map", m.adminMap)
 	http.HandleFunc("/admin/mapic", m.adminICMap)

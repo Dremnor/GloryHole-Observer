@@ -262,7 +262,7 @@
         </vue-context>
 
         <modal name="coordSet">
-          <form v-on:submit.prevent="setCoords(form)">
+          <form v-on:submit.prevent="setCoords()">
             <input v-model="coordSet.x" class="input" type="text" placeholder="0">
             <input v-model="coordSet.y" class="input" type="text" placeholder="0">
             <button class="button is-primary">Submit</button>
@@ -274,7 +274,6 @@
 </template>
 
 <script>
-import ModelSelect from 'vue-search-select'
 import {GridCoordLayer, HnHCRS, HnHMaxZoom, HnHMinZoom, TileSize} from "../utils/LeafletCustomTypes";
 import {SmartTileLayer} from "../utils/SmartTileLayer";
 import * as L from "leaflet";
@@ -287,7 +286,6 @@ import VueContext from 'vue-context';
 export default {
   name: "MapView",
   components: {
-    ModelSelect,
     VueContext,
   },
   data: function () {
@@ -584,9 +582,9 @@ export default {
         map.value = map.ID;
         this.maps.push(map);
       }
-      this.maps.sort((a, b) => {
-        return a.size < b.size;
-      });
+      // Names default to the map's numeric ID, so compare numerically where
+      // possible and fall back to the ID for a stable order.
+      this.maps.sort((a, b) => a.Name.localeCompare(b.Name, undefined, {numeric: true}) || a.ID - b.ID);
 
       // Update url on manual drag, zoom
       this.map.on("drag", () => {
@@ -738,8 +736,11 @@ export default {
             return m;
           }),
           (marker) => { // Add
-            if (marker.map === this.mapid || marker.map === this.overlayLayer.map) {
+            // Respect the sidebar toggles, otherwise a marker refresh brings
+            // back categories the user has just hidden.
+            if (this.markerVisible(marker)) {
               marker.add(this);
+              marker.tooltip(this.markerTooltipState(marker));
             }
             marker.setClickCallback(() => {
               this.map.setView(marker.marker.getLatLng(), this.map.getZoom());
@@ -790,7 +791,10 @@ export default {
             return ch;
           }),
           (character) => { // Add
-            character.add(this);
+            if (this.showPlayers) {
+              character.add(this);
+              character.tooltip(this.showPlayerTooltips);
+            }
             character.setClickCallback(() => { // Zoom to character on marker click
               this.trackingCharacterId = character.id;
             });
@@ -811,6 +815,21 @@ export default {
       );
       this.players.length = 0;
       this.characters.getElements().forEach(it => this.players.push(it));
+    },
+    // Whether a marker belongs on screen right now: on a visible map layer, and
+    // in a category the user has not switched off.
+    markerVisible(marker) {
+      if (marker.map !== this.mapid && marker.map !== this.overlayLayer.map) {
+        return false;
+      }
+      if (marker.type === "thingwall") return this.showThingwalls;
+      if (marker.type === "quest") return this.showQuests;
+      return this.showMarkers;
+    },
+    markerTooltipState(marker) {
+      if (marker.type === "thingwall") return this.showThingwallTooltips;
+      if (marker.type === "quest") return this.showQuestTooltips;
+      return false;
     },
     processConfig(config) {
       document.title = config.title;
@@ -834,7 +853,7 @@ export default {
       this.coordSetFrom = data.coords;
       this.$modal.show('coordSet');
     },
-    setCoords(form) {
+    setCoords() {
       this.$http.get(`${API_ENDPOINT}/admin/setCoords`, {
         params: {
           map: this.mapid,

@@ -46,7 +46,14 @@ func (m *Map) GetTile(mapid int, c Coord, z int) (td *TileData) {
 }
 
 func (m *Map) SaveTile(mapid int, c Coord, z int, f string, t int64) {
-	m.db.Update(func(tx *bbolt.Tx) error {
+	td := &TileData{
+		MapID: mapid,
+		Coord: c,
+		Zoom:  z,
+		File:  f,
+		Cache: t,
+	}
+	err := m.db.Update(func(tx *bbolt.Tx) error {
 		tiles, err := tx.CreateBucketIfNotExists([]byte("tiles"))
 		if err != nil {
 			return err
@@ -59,21 +66,18 @@ func (m *Map) SaveTile(mapid int, c Coord, z int, f string, t int64) {
 		if err != nil {
 			return err
 		}
-		td := &TileData{
-			MapID: mapid,
-			Coord: c,
-			Zoom:  z,
-			File:  f,
-			Cache: t,
-		}
 		raw, err := json.Marshal(td)
 		if err != nil {
 			return err
 		}
-		m.gridUpdates.send(td)
 		return zoom.Put([]byte(c.Name()), raw)
 	})
-	return
+	if err != nil {
+		log.Println("SaveTile:", err)
+		return
+	}
+	// Only tell watchers about the tile once the write has actually committed.
+	m.gridUpdates.send(td)
 }
 
 func (m *Map) reportMerge(from, to int, shift Coord) {
@@ -210,6 +214,10 @@ func (m *Map) gridTile(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	tile := tileRegex.FindStringSubmatch(req.URL.Path)
+	if tile == nil {
+		http.Error(rw, "file not found", http.StatusNotFound)
+		return
+	}
 	mapid, err := strconv.Atoi(tile[1])
 	if err != nil {
 		http.Error(rw, "request parsing error", http.StatusInternalServerError)

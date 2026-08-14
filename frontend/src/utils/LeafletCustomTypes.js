@@ -1,5 +1,4 @@
 import L, {Bounds, LatLng, Point} from "leaflet"
-import {getTileUrl} from "../main";
 
 export const TileSize = 100;
 export const HnHMaxZoom = 7;

@@ -163,6 +163,7 @@ func (m *Map) changePassword(rw http.ResponseWriter, req *http.Request) {
 			return nil
 		})
 		http.Redirect(rw, req, "/", 302)
+		return
 	}
 
 	m.ExecuteTemplate(rw, "password.tmpl", struct {

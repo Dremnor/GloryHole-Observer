@@ -46,6 +46,12 @@
                             </label>
                         </li>
                         <li class="collection-item">
+                            <em>A character is only shown to map users who share one of its
+                            groups, and its groups come from whoever uploaded it. An account
+                            with Upload but no group below uploads characters that everyone
+                            can see.</em>
+                        </li>
+                        <li class="collection-item">
                             <label>
                                 <input type="checkbox" name="auths" value="g1"{{if .User.Auths.Has "g1"}} checked="checked"{{end}}/>
                                 <span>Group 1</span>

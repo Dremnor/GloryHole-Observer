@@ -55,7 +55,6 @@ export class Marker {
                     tooltipAnchor: [1, 3]
                 })
             } else {
-                let zoom = HnHMaxZoom - this.view.getZoom();
                 let url = `${this.image}.png`;
                 if (isCave)
                     url = 'gfx/hud/mmap/cave.png';

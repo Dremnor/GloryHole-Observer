@@ -108,6 +108,13 @@ func (m *Map) adminUser(rw http.ResponseWriter, req *http.Request) {
 		if username == s.Username {
 			s.Auths = auths
 		}
+		// A character's visibility group comes from whoever uploaded it, and a
+		// character with no group is shown to every map user. An upload account
+		// without a group role therefore quietly bypasses the group system.
+		if Auths(auths).Has(AUTH_UPLOAD) && len(groupArr(auths)) == 0 {
+			log.Printf("admin: user %q can upload but has no group role (g1-g5); "+
+				"characters it uploads will be visible to every map user", username)
+		}
 		if tempAdmin {
 			m.deleteSession(s)
 		}
@@ -148,7 +155,28 @@ func (m *Map) wipe(rw http.ResponseWriter, req *http.Request) {
 		http.Redirect(rw, req, "/", 302)
 		return
 	}
+	// Collect the map IDs before dropping the buckets, so the tile directories
+	// they own can be removed afterwards. Only these directories and "grids"
+	// are touched — grids.db lives in the same folder and must survive.
+	mapIDs := map[int]struct{}{}
 	err := m.db.Update(func(tx *bbolt.Tx) error {
+		if b := tx.Bucket([]byte("maps")); b != nil {
+			b.ForEach(func(k, v []byte) error {
+				if id, err := strconv.Atoi(string(k)); err == nil {
+					mapIDs[id] = struct{}{}
+				}
+				return nil
+			})
+		}
+		if b := tx.Bucket([]byte("grids")); b != nil {
+			b.ForEach(func(k, v []byte) error {
+				gd := GridData{}
+				if json.Unmarshal(v, &gd) == nil {
+					mapIDs[gd.Map] = struct{}{}
+				}
+				return nil
+			})
+		}
 		if tx.Bucket([]byte("grids")) != nil {
 			err := tx.DeleteBucket([]byte("grids"))
 			if err != nil {
@@ -177,10 +205,19 @@ func (m *Map) wipe(rw http.ResponseWriter, req *http.Request) {
 	})
 	if err != nil {
 		log.Println(err)
+		http.Redirect(rw, req, "/admin/", 302)
+		return
 	}
-	/*for z := 1; z <= 6; z++ {
-		os.RemoveAll(fmt.Sprintf("%s/%d", m.gridStorage, z))
-	}*/
+
+	// Drop the tile images too, otherwise a wipe leaks the whole map onto disk.
+	if err := os.RemoveAll(filepath.Join(m.gridStorage, "grids")); err != nil {
+		log.Println("wipe: removing grids:", err)
+	}
+	for id := range mapIDs {
+		if err := os.RemoveAll(filepath.Join(m.gridStorage, strconv.Itoa(id))); err != nil {
+			log.Printf("wipe: removing map %d: %v", id, err)
+		}
+	}
 	http.Redirect(rw, req, "/admin/", 302)
 }
 
@@ -730,6 +767,12 @@ func (m *Map) hideMarker(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) merge(rw http.ResponseWriter, req *http.Request) {
+	s := m.getSession(req)
+	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
+		http.Redirect(rw, req, "/", 302)
+		return
+	}
+
 	err := req.ParseMultipartForm(1024 * 1024 * 500)
 	if err != nil {
 		log.Println(err)
