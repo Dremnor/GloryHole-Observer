@@ -82,7 +82,8 @@
                               placeholder="Select Marker">
 
                 <template v-slot:item="data">
-                  <img class="mr-2" style="width:24px;height: 24px;" :src="data.item.image + '.png'"/>
+                  <img class="mr-2" style="width:24px;height: 24px;" :src="data.item.image + '.png'"
+                       @error="iconFallback"/>
                   {{ data.item.name }}
                 </template>
               </v-autocomplete>
@@ -108,7 +109,8 @@
                               placeholder="Select Marker">
 
                 <template v-slot:item="data">
-                  <img class="mr-2" style="width:24px;height: 24px;" :src="data.item.image + '.png'"/>
+                  <img class="mr-2" style="width:24px;height: 24px;" :src="data.item.image + '.png'"
+                       @error="iconFallback"/>
                   {{ data.item.name }}
                 </template>
               </v-autocomplete>
@@ -144,7 +146,8 @@
                               placeholder="Select Marker">
 
                 <template v-slot:item="data">
-                  <img class="mr-2" style="width:24px;height: 24px;" :src="data.item.image + '.png'"/>
+                  <img class="mr-2" style="width:24px;height: 24px;" :src="data.item.image + '.png'"
+                       @error="iconFallback"/>
                   {{ data.item.name }}
                 </template>
               </v-autocomplete>
@@ -274,7 +277,15 @@
 </template>
 
 <script>
-import {GridCoordLayer, HnHCRS, HnHMaxZoom, HnHMinZoom, TileSize} from "../utils/LeafletCustomTypes";
+import {
+  GridCoordLayer,
+  HnHCRS,
+  HnHMaxZoom,
+  HnHMinZoom,
+  reportMissingIcon,
+  TileSize,
+  UnknownIconUrl
+} from "../utils/LeafletCustomTypes";
 import {SmartTileLayer} from "../utils/SmartTileLayer";
 import * as L from "leaflet";
 import {API_ENDPOINT} from "../main";
@@ -815,6 +826,17 @@ export default {
       );
       this.players.length = 0;
       this.characters.getElements().forEach(it => this.players.push(it));
+    },
+    // Same fallback the map markers use, for the icons shown in the sidebar
+    // pickers. Without it a marker whose icon this server lacks is a blank gap
+    // in the list.
+    iconFallback(event) {
+      const img = event.target;
+      if (img.src === UnknownIconUrl) {
+        return;
+      }
+      reportMissingIcon(img.getAttribute('src'));
+      img.src = UnknownIconUrl;
     },
     // Whether a marker belongs on screen right now: on a visible map layer, and
     // in a category the user has not switched off.
