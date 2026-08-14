@@ -136,6 +136,9 @@ func main() {
 	http.HandleFunc("/admin/merge", m.merge)
 	http.HandleFunc("/admin/map", m.adminMap)
 	http.HandleFunc("/admin/mapic", m.adminICMap)
+	http.HandleFunc("/admin/icons", m.adminIcons)
+	http.HandleFunc("/admin/icons/upload", m.uploadIcon)
+	http.HandleFunc("/admin/icons/delete", m.deleteIcon)
 
 	// Map frontend endpoints
 	http.HandleFunc("/map/api/v1/characters", m.getChars)
@@ -148,6 +151,10 @@ func main() {
 	http.HandleFunc("/map/grids/", m.gridTile)
 	http.HandleFunc("/map/api/maps", m.getMaps)
 	//http.Handle("/map/grids/", http.StripPrefix("/map/grids", http.FileServer(http.Dir(m.gridStorage))))
+
+	// Registered ahead of the static handler below: ServeMux prefers the longer
+	// pattern, so marker artwork goes through the icon override first.
+	http.HandleFunc("/map/gfx/", m.gfxAsset)
 
 	http.Handle("/map/", http.StripPrefix("/map", http.FileServer(http.Dir("frontend"))))
 

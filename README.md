@@ -121,6 +121,27 @@ containers have no egress at all — check `docker run --rm alpine ping -c2 1.1.
 and `sysctl net.ipv4.ip_forward`, which is a firewall or forwarding problem
 rather than DNS.
 
+## Marker icons
+
+Markers are drawn from images addressed by the path the client reports, such as
+`gfx/terobjs/mm/thingwall`. Clients gain markers for newly added game objects
+before this server ships the matching image; until then those markers show a
+placeholder on the map and log the missing file to the browser console.
+
+**Admin portal → Manage icons** lists every image markers refer to, which ones
+have no icon, and how many markers use each. Uploading one there stores it with
+the map data rather than in the frontend build, so it takes effect immediately,
+survives rebuilds, and takes precedence over a built-in image of the same name.
+Removing an upload falls back to the built-in image, or to the placeholder if
+there is none.
+
+PNG only, up to 1 MiB and 512 px per side. Uploads are decoded and re-encoded
+server-side, so a file that merely claims to be a PNG is rejected. Markers draw
+at 18 px, so larger images only help on high-density displays.
+
+To ship an icon permanently instead, put it under `frontend/public/` at the same
+path and rebuild.
+
 ## Configuration
 
 Flags, all optional:
