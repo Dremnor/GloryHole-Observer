@@ -24,6 +24,12 @@
 			map data, so it survives a rebuild and takes precedence over the image
 			shipped with the frontend.</p>
 
+			<p>To edit an existing icon, download it, change it, and upload it back
+			against the same key.</p>
+			<a href="/admin/icons/export" class="waves-effect waves-light blue btn">
+				<i class="material-icons left">archive</i>Download all icons (.zip)
+			</a>
+
 			{{if .Error}}<div class="card-panel red lighten-4">{{.Error}}</div>{{end}}
 
 			{{if .Missing}}
@@ -40,6 +46,7 @@
 						<th>Image key</th>
 						<th>Source</th>
 						<th>Markers</th>
+						<th>Current</th>
 						<th>Replace</th>
 					</tr>
 				</thead>
@@ -61,6 +68,16 @@
 						</td>
 						<td>{{.Markers}}</td>
 						<td>
+							{{if .Missing}}
+								<span class="grey-text">&mdash;</span>
+							{{else}}
+								<a class="btn-small waves-effect waves-light grey darken-1"
+								   href="/admin/icons/download?key={{.Key}}">
+									<i class="material-icons">file_download</i>
+								</a>
+							{{end}}
+						</td>
+						<td>
 							<form class="icon-form" action="/admin/icons/upload" method="POST" enctype="multipart/form-data">
 								<input type="hidden" name="key" value="{{.Key}}">
 								<input type="file" name="file" accept="image/png" required>
@@ -75,7 +92,7 @@
 						</td>
 					</tr>
 				{{else}}
-					<tr><td colspan="5">No markers have been uploaded yet, so there is nothing to show.</td></tr>
+					<tr><td colspan="6">No markers have been uploaded yet, so there is nothing to show.</td></tr>
 				{{end}}
 				</tbody>
 			</table>

@@ -139,6 +139,8 @@ func main() {
 	http.HandleFunc("/admin/icons", m.adminIcons)
 	http.HandleFunc("/admin/icons/upload", m.uploadIcon)
 	http.HandleFunc("/admin/icons/delete", m.deleteIcon)
+	http.HandleFunc("/admin/icons/download", m.downloadIcon)
+	http.HandleFunc("/admin/icons/export", m.exportIcons)
 
 	// Map frontend endpoints
 	http.HandleFunc("/map/api/v1/characters", m.getChars)

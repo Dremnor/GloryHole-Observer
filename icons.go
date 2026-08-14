@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -74,6 +75,24 @@ type IconEntry struct {
 
 func (e IconEntry) Missing() bool { return e.Source == IconMissing }
 func (e IconEntry) Custom() bool  { return e.Source == IconCustom }
+
+// iconFilePath resolves the file currently serving key, preferring an upload
+// over the image shipped with the build. ok is false when neither exists.
+func (m *Map) iconFilePath(key string) (string, bool) {
+	if p := m.customIconPath(key); fileExists(p) {
+		return p, true
+	}
+	if p := builtinIconPath(key); fileExists(p) {
+		return p, true
+	}
+	return "", false
+}
+
+// downloadName flattens a key into a filename that still says which key the
+// image belongs to, so a folder of downloaded icons stays sortable.
+func downloadName(key string) string {
+	return strings.ReplaceAll(key, "/", "_") + ".png"
+}
 
 // iconSource reports where the image for key would be served from.
 func (m *Map) iconSource(key string) IconSource {
@@ -287,6 +306,72 @@ func (m *Map) uploadIcon(rw http.ResponseWriter, req *http.Request) {
 
 	log.Printf("icon %q uploaded by %q", key, s.Username)
 	http.Redirect(rw, req, "/admin/icons", 302)
+}
+
+// downloadIcon hands back the image currently in use for one key, so it can be
+// edited and uploaded again.
+func (m *Map) downloadIcon(rw http.ResponseWriter, req *http.Request) {
+	s := m.getSession(req)
+	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
+		http.Redirect(rw, req, "/", 302)
+		return
+	}
+
+	key := strings.TrimSpace(req.FormValue("key"))
+	if !iconKeyOK(key) {
+		http.Error(rw, "invalid icon key", http.StatusBadRequest)
+		return
+	}
+	src, ok := m.iconFilePath(key)
+	if !ok {
+		http.Error(rw, "no icon for that key", http.StatusNotFound)
+		return
+	}
+
+	rw.Header().Set("Content-Type", "image/png")
+	rw.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", downloadName(key)))
+	http.ServeFile(rw, req, src)
+}
+
+// exportIcons zips every icon in use, laid out by key, so a batch can be edited
+// without downloading them one at a time. Keys with no icon are skipped —
+// there is nothing to send for those.
+func (m *Map) exportIcons(rw http.ResponseWriter, req *http.Request) {
+	s := m.getSession(req)
+	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
+		http.Redirect(rw, req, "/", 302)
+		return
+	}
+
+	rw.Header().Set("Content-Type", "application/zip")
+	rw.Header().Set("Content-Disposition", `attachment; filename="marker-icons.zip"`)
+
+	zw := zip.NewWriter(rw)
+	defer zw.Close()
+
+	for _, e := range m.iconEntries() {
+		src, ok := m.iconFilePath(e.Key)
+		if !ok {
+			continue
+		}
+		f, err := os.Open(src)
+		if err != nil {
+			log.Printf("icon export: %s: %v", e.Key, err)
+			continue
+		}
+		// The archive mirrors the keys, so an edited file can be matched back
+		// to the marker image it belongs to.
+		w, err := zw.Create(e.Key + ".png")
+		if err != nil {
+			f.Close()
+			log.Printf("icon export: %s: %v", e.Key, err)
+			return
+		}
+		if _, err := io.Copy(w, f); err != nil {
+			log.Printf("icon export: %s: %v", e.Key, err)
+		}
+		f.Close()
+	}
 }
 
 func (m *Map) deleteIcon(rw http.ResponseWriter, req *http.Request) {

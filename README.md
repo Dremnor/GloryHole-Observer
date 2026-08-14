@@ -135,6 +135,11 @@ survives rebuilds, and takes precedence over a built-in image of the same name.
 Removing an upload falls back to the built-in image, or to the placeholder if
 there is none.
 
+To edit an icon rather than replace it outright, download the current one from
+the same page — per key, or all of them as a zip laid out by key — change it,
+and upload it back against that key. The download serves whichever image is in
+use, so it works for built-in icons as well as previous uploads.
+
 PNG only, up to 1 MiB and 512 px per side. Uploads are decoded and re-encoded
 server-side, so a file that merely claims to be a PNG is rejected. Markers draw
 at 18 px, so larger images only help on high-density displays.

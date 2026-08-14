@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -134,5 +135,51 @@ func TestIconEntriesSortMissingFirst(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("order = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestDownloadNameKeepsTheKeyReadable(t *testing.T) {
+	cases := map[string]string{
+		"gfx/terobjs/mm/thingwall": "gfx_terobjs_mm_thingwall.png",
+		"custom":                   "custom.png",
+		"a/b":                      "a_b.png",
+	}
+	for key, want := range cases {
+		if got := downloadName(key); got != want {
+			t.Errorf("downloadName(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestDownloadNameHasNoPathSeparators(t *testing.T) {
+	// The result goes into a Content-Disposition filename, so it must not be
+	// able to suggest a path of its own.
+	for _, key := range []string{"gfx/terobjs/mm/thingwall", "a/b/c/d"} {
+		got := downloadName(key)
+		if strings.ContainsAny(got, `/\`) {
+			t.Errorf("downloadName(%q) = %q, which still contains a separator", key, got)
+		}
+	}
+}
+
+func TestIconFilePathPrefersTheUpload(t *testing.T) {
+	dir := t.TempDir()
+	m := &Map{gridStorage: dir}
+	key := "gfx/terobjs/mm/probe"
+
+	if _, ok := m.iconFilePath(key); ok {
+		t.Fatal("a key with no icon anywhere must report none")
+	}
+
+	custom := m.customIconPath(key)
+	if err := os.MkdirAll(filepath.Dir(custom), 0755); err != nil {
+		t.Fatalf("preparing the icon directory: %v", err)
+	}
+	if err := os.WriteFile(custom, encodePNG(t, 8, 8), 0644); err != nil {
+		t.Fatalf("writing the upload: %v", err)
+	}
+	got, ok := m.iconFilePath(key)
+	if !ok || got != custom {
+		t.Errorf("iconFilePath = (%q, %v), want the uploaded file %q", got, ok, custom)
 	}
 }
