@@ -843,10 +843,10 @@ export default {
       this.map.setView([0, 0], HnHMinZoom);
     },
     wipeTile(data) {
-      this.$http.get(`${API_ENDPOINT}/admin/wipeTile`, {params: {...data.coords, map: this.mapid}});
+      this.$http.post(`${API_ENDPOINT}/admin/wipeTile`, null, {params: {...data.coords, map: this.mapid}});
     },
     hideMarker(data) {
-      this.$http.get(`${API_ENDPOINT}/admin/hideMarker`, {params: {id: data.id}});
+      this.$http.post(`${API_ENDPOINT}/admin/hideMarker`, null, {params: {id: data.id}});
       this.markers.byId(data.id).remove(this);
     },
     queryCoordSet(data) {
@@ -854,7 +854,7 @@ export default {
       this.$modal.show('coordSet');
     },
     setCoords() {
-      this.$http.get(`${API_ENDPOINT}/admin/setCoords`, {
+      this.$http.post(`${API_ENDPOINT}/admin/setCoords`, null, {
         params: {
           map: this.mapid,
           fx: this.coordSetFrom.x,

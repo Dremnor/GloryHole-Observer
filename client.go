@@ -8,7 +8,6 @@ import (
 	"image"
 	"image/png"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -123,7 +122,7 @@ func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User)
 		}
 		Type string
 	}{}
-	buf, err := ioutil.ReadAll(req.Body)
+	buf, err := io.ReadAll(req.Body)
 	if err != nil {
 		log.Println("Error reading position update json: ", err)
 		return
@@ -204,7 +203,7 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 		Type   string
 		Color  string
 	}{}
-	buf, err := ioutil.ReadAll(req.Body)
+	buf, err := io.ReadAll(req.Body)
 	if err != nil {
 		log.Println("Error reading marker json: ", err)
 		return
@@ -235,12 +234,32 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 					userFrom(req.Context()), mraw.GridID)
 				continue
 			}
-			key := []byte(fmt.Sprintf("%s_%d_%d", mraw.GridID, mraw.X, mraw.Y))
-			if grid.Get(key) != nil {
-				continue
-			}
 			if mraw.Image == "" {
 				mraw.Image = "gfx/terobjs/mm/custom"
+			}
+			key := []byte(fmt.Sprintf("%s_%d_%d", mraw.GridID, mraw.X, mraw.Y))
+			if existing := grid.Get(key); existing != nil {
+				// A marker used to be written once and never touched again, so a
+				// rename or a changed icon in game never reached the map. Update
+				// those, but keep the ID the frontend refers to and any Hidden
+				// flag an admin has set.
+				em := Marker{}
+				if err := json.Unmarshal(existing, &em); err != nil {
+					continue
+				}
+				if em.Name == mraw.Name && em.Image == mraw.Image {
+					continue
+				}
+				em.Name = mraw.Name
+				em.Image = mraw.Image
+				raw, err := json.Marshal(em)
+				if err != nil {
+					return err
+				}
+				if err := grid.Put(key, raw); err != nil {
+					return err
+				}
+				continue
 			}
 			id, err := idB.NextSequence()
 			if err != nil {

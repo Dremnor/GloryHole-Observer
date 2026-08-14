@@ -1,0 +1,12 @@
+.git
+.gitignore
+
+# Build outputs — the image builds these itself.
+hnh-map
+hnh-map.exe
+frontend/node_modules
+frontend/dist
+
+# Local map data must never leak into an image.
+grids/
+*.db

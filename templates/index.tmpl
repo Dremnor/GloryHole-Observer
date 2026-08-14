@@ -28,7 +28,9 @@
 					<li class="collection-item">You have no tokens, generate one now!</li>
 				{{end}}
 				</ul>
-				<a class="waves-effect waves-light btn" href="/generateToken">Generate Token</a>
+				<form action="/generateToken" method="POST">
+					<button class="waves-effect waves-light btn" type="submit">Generate Token</button>
+				</form>
 			{{end}}
 			</div>
 			</div>

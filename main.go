@@ -248,6 +248,25 @@ type User struct {
 	Tokens []string
 }
 
+// requirePOST rejects a state-changing request that did not arrive as a POST.
+// Together with the SameSite=Lax session cookie this is what stops cross-site
+// requests: Lax withholds the cookie from cross-site POSTs, while requiring
+// POST stops a plain link — which Lax still sends the cookie with — from
+// triggering a destructive action.
+func requirePOST(rw http.ResponseWriter, req *http.Request) bool {
+	if req.Method != http.MethodPost {
+		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
+}
+
+// requestIsHTTPS reports whether the client reached us over TLS, either
+// directly or through a terminating reverse proxy.
+func requestIsHTTPS(req *http.Request) bool {
+	return req.TLS != nil || req.Header.Get("X-Forwarded-Proto") == "https"
+}
+
 func (m *Map) getSession(req *http.Request) *Session {
 	c, err := req.Cookie("session")
 	if err != nil {

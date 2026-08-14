@@ -108,7 +108,9 @@
                         </div>
                         <div class="modal-footer">
                         <a href="#!" class="modal-close waves-effect waves-light green btn">Cancel</a>
-                        <a href="/admin/wipe" class="waves-effect waves-light red btn">WIPE</a>
+                        <form action="/admin/wipe" method="POST" style="display:inline">
+                            <button class="waves-effect waves-light red btn" type="submit">WIPE</button>
+                        </form>
                         </div>
                     </div>
                 </div>
@@ -116,7 +118,9 @@
             <div class="card">
                 <div class="card-content">
                     <h5>Rebuild zooms</h5>
-                    <a href="/admin/rebuildZooms" class="waves-effect waves-light red btn">Rebuild Zooms</a>
+                    <form action="/admin/rebuildZooms" method="POST">
+                        <button class="waves-effect waves-light red btn" type="submit">Rebuild Zooms</button>
+                    </form>
                 </div>
             </div>
             <div class="card">

@@ -150,6 +150,9 @@ func (m *Map) adminUser(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) wipe(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
 		http.Redirect(rw, req, "/", 302)
@@ -279,6 +282,9 @@ type zoomproc struct {
 }
 
 func (m *Map) rebuildZooms(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
 		http.Redirect(rw, req, "/", 302)
@@ -335,6 +341,9 @@ func (m *Map) rebuildZooms(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) deleteUser(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
 		http.Redirect(rw, req, "/", 302)
@@ -378,6 +387,9 @@ func (m *Map) deleteUser(rw http.ResponseWriter, req *http.Request) {
 var errFound = errors.New("found tile")
 
 func (m *Map) wipeTile(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
 		http.Redirect(rw, req, "/", 302)
@@ -439,6 +451,9 @@ func (m *Map) wipeTile(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) setCoords(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
 		http.Redirect(rw, req, "/", 302)
@@ -726,6 +741,9 @@ func (m *Map) export(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) hideMarker(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
 		http.Redirect(rw, req, "/", 302)

@@ -1,37 +1,38 @@
-FROM golang:1.21.4-alpine3.18 AS gobuilder
+FROM golang:1.25-alpine AS gobuilder
 
-RUN mkdir /hnh-map
-WORKDIR /hnh-map
+WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN go version
 RUN go mod download
 
 COPY . .
-RUN go build -o hnh-map.go
+# Static binary so the runtime stage needs no libc beyond alpine's.
+RUN CGO_ENABLED=0 go build -o /out/hnh-map .
 
-FROM alpine:3.18.4 AS frontendbuilder
+FROM node:22-alpine AS frontendbuilder
 
-RUN mkdir /frontend
 WORKDIR /frontend
 
-RUN apk add --no-cache npm
-
-COPY frontend/package.json .
-RUN npm install --legacy-peer-deps
+# npm ci installs exactly what package-lock.json pins, so an image built today
+# resolves the same dependency tree as one built months from now.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --legacy-peer-deps
 
 COPY frontend/ ./
-RUN npm run build-new --omit=dev
+RUN npm run build
 
-FROM alpine:3.18.4
+FROM alpine:3
 
-RUN mkdir /hnh-map
 WORKDIR /hnh-map
 
-COPY --from=gobuilder /hnh-map/hnh-map.go ./
+COPY --from=gobuilder /out/hnh-map ./
 COPY --from=frontendbuilder /frontend/dist ./frontend
 COPY templates ./templates
 COPY public ./public
 
+# grids.db and the tile images live here and must be writable.
+VOLUME /map
+
 EXPOSE 8080
-CMD /hnh-map/hnh-map.go -grids=/map
+ENTRYPOINT ["/hnh-map/hnh-map"]
+CMD ["-grids=/map"]
