@@ -32,6 +32,26 @@ Prefer an existing nginx? Use `deploy/nginx.conf` instead, drop the `proxy`
 service from `docker-compose.yml`, and publish the map container on
 `127.0.0.1:8080`.
 
+### No domain yet? Run it on a port
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.direct.yml up -d --build
+```
+
+This skips Caddy and publishes the server on `127.0.0.1:8080`. Reach it through
+an SSH tunnel from your own machine:
+
+```sh
+ssh -L 8080:127.0.0.1:8080 root@your-server
+```
+
+then open `http://localhost:8080`. Create the first user (below), and only then
+change the `ports` entry in `docker-compose.direct.yml` to `"8080:8080"` and
+re-run the command to publish it.
+
+There is no TLS this way, so logins cross the network in clear text. Move to
+the Caddy setup once a domain points at the host.
+
 ### Set up the first user before exposing the server
 
 Until the first user exists, **anyone can log in as `admin` / `admin`**. On a
