@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -57,8 +58,18 @@ func (m *Map) index(rw http.ResponseWriter, req *http.Request) {
 
 func (m *Map) login(rw http.ResponseWriter, req *http.Request) {
 	if req.Method == "POST" {
+		key := clientAddr(req, *trustProxyHeaders)
+		if !m.loginLimit.allowed(key) {
+			log.Printf("login: too many failed attempts from %s, refusing", key)
+			rw.Header().Set("Retry-After", strconv.Itoa(int(loginWindow.Seconds())))
+			http.Error(rw, "Too many failed login attempts. Try again later.", http.StatusTooManyRequests)
+			return
+		}
 		u := m.getUser(req.FormValue("user"), req.FormValue("pass"))
-		if u != nil {
+		if u == nil {
+			m.loginLimit.recordFailure(key)
+		} else {
+			m.loginLimit.recordSuccess(key)
 			session := make([]byte, 32)
 			rand.Read(session)
 			http.SetCookie(rw, &http.Cookie{

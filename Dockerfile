@@ -23,6 +23,9 @@ RUN npm run build
 
 FROM alpine:3
 
+# Fixed UID so a bind-mounted map directory can be chowned to a known owner.
+RUN adduser -D -H -u 10001 hnhmap
+
 WORKDIR /hnh-map
 
 COPY --from=gobuilder /out/hnh-map ./
@@ -30,8 +33,13 @@ COPY --from=frontendbuilder /frontend/dist ./frontend
 COPY templates ./templates
 COPY public ./public
 
-# grids.db and the tile images live here and must be writable.
+# grids.db and the tile images live here and must be writable. A named volume
+# inherits this ownership on first use; a bind mount keeps the host's, so those
+# need `chown -R 10001:10001` once — see README.
+RUN mkdir -p /map && chown hnhmap:hnhmap /map
 VOLUME /map
+
+USER hnhmap
 
 EXPOSE 8080
 ENTRYPOINT ["/hnh-map/hnh-map"]

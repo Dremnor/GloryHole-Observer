@@ -1,0 +1,32 @@
+services:
+  map:
+    build: .
+    restart: unless-stopped
+    command:
+      - -grids=/map
+      # Safe here because the port below is never published to the host: the
+      # only thing that can reach this container is the proxy.
+      - -trust-proxy-headers
+      - -merge-min-overlap=2
+    volumes:
+      - mapdata:/map
+    expose:
+      - "8080"
+
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - map
+
+volumes:
+  mapdata:
+  caddydata:
+  caddyconfig:

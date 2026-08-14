@@ -28,6 +28,8 @@ type Map struct {
 
 	gridUpdates  topic
 	mergeUpdates mergeTopic
+
+	loginLimit *loginLimiter
 }
 
 type Session struct {
@@ -55,6 +57,12 @@ var (
 	// overlapping grids within a request or two.
 	mergeMinOverlap = flag.Int("merge-min-overlap", 2,
 		"how many overlapping grids must agree before two maps are merged automatically (1 restores the old behaviour)")
+	trustProxyHeaders = flag.Bool("trust-proxy-headers", false,
+		"read the client address from X-Forwarded-For; only enable behind a reverse proxy whose port is not reachable directly")
+	loginMaxFailures = flag.Int("login-max-failures", 10,
+		"failed logins from one address before it is locked out (0 disables the limit)")
+	loginWindow = flag.Duration("login-window", 15*time.Minute,
+		"how long a login lockout lasts, extended by each further failure")
 )
 
 func faviconHandler(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +83,8 @@ func main() {
 		characters: map[string]Character{},
 
 		WebApp: webapp.Must(webapp.New().LoadTemplates("./templates/")),
+
+		loginLimit: newLoginLimiter(*loginMaxFailures, *loginWindow),
 	}
 
 	err = db.Update(func(tx *bbolt.Tx) error {
@@ -99,6 +109,7 @@ func main() {
 	}
 
 	go m.cleanChars()
+	go m.loginLimit.cleanup()
 
 	//http.HandleFunc("/favicon.ico", faviconHandler)
 	http.Handle("/favicon.ico", http.FileServer(http.Dir("public")))
