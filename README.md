@@ -85,6 +85,42 @@ everyone**, so an upload account without a `g1`–`g5` role bypasses the group
 system entirely. The admin user form warns about this, and the server logs it
 when such an account is saved.
 
+### If the build fails on DNS
+
+On a host whose resolver list includes an IPv6 nameserver, the build can fail
+almost immediately with:
+
+```
+go mod download
+go: ...: dial udp [2a01:...]:53: connect: network is unreachable
+```
+
+Docker's default bridge network is IPv4-only, so a container handed an IPv6
+nameserver cannot reach it. Give containers explicit resolvers instead:
+
+```sh
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'EOF'
+{
+  "dns": ["1.1.1.1", "8.8.8.8"]
+}
+EOF
+systemctl restart docker
+```
+
+Verify against a build container rather than `docker run`, since that is where
+it failed:
+
+```sh
+printf 'FROM alpine\nRUN cat /etc/resolv.conf && nslookup proxy.golang.org\n' \
+    | docker build --no-cache --progress=plain -
+```
+
+If name resolution now works but the build still cannot reach the network,
+containers have no egress at all — check `docker run --rm alpine ping -c2 1.1.1.1`
+and `sysctl net.ipv4.ip_forward`, which is a firewall or forwarding problem
+rather than DNS.
+
 ## Configuration
 
 Flags, all optional:
