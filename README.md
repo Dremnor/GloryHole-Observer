@@ -28,9 +28,34 @@ the VPS before starting, or the certificate request will fail.
 To host a second service on the same VPS, add another block to
 `deploy/Caddyfile` — Caddy routes by hostname, so both share ports 80 and 443.
 
-Prefer an existing nginx? Use `deploy/nginx.conf` instead, drop the `proxy`
-service from `docker-compose.yml`, and publish the map container on
-`127.0.0.1:8080`.
+### The host already runs Apache or nginx
+
+Another site on the same host owns ports 80 and 443, so Caddy cannot bind them.
+It fails at container start rather than at run time, which shows up as a proxy
+stuck in `Created` with **no logs at all** and a site that does not answer:
+
+```
+gloryhole-observer-proxy-1   caddy:2-alpine   ...   Created
+```
+
+`docker compose up -d proxy` prints the real reason (`failed to bind host port
+0.0.0.0:80/tcp: address already in use`), and `ss -tlnp | grep -E ':(80|443) '`
+names the process holding them.
+
+Put the map behind that web server instead:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.behind-proxy.yml up -d --build
+```
+
+That publishes the map on `127.0.0.1:8080` and leaves Caddy out. Then use
+`deploy/apache.conf` or `deploy/nginx.conf` as the virtual host, with the
+certificate from `certbot --apache` or `certbot --nginx`.
+
+Both configs get two details right that fail quietly otherwise: the live tile
+feed is Server-Sent Events, so it must not be buffered (`flushpackets=on` in
+Apache, `proxy_buffering off` in nginx) or the map silently stops updating; and
+tile uploads run to 100MB against nginx's 1MB default body limit.
 
 ### No domain yet? Run it on a port
 
@@ -191,8 +216,12 @@ Flags, all optional:
 | `-login-window` | `15m` | How long a lockout lasts |
 
 `-trust-proxy-headers` must only be enabled when the port is unreachable except
-through the proxy, which is how `docker-compose.yml` is arranged. Turning it on
-with the port exposed lets anyone forge the header and evade the login limit.
+through the proxy — either unpublished (`docker-compose.yml`) or bound to
+loopback (`docker-compose.behind-proxy.yml`). Turning it on with the port
+exposed lets anyone forge the header and evade the login limit. The address is
+read from the **last** `X-Forwarded-For` entry, the one the proxy appended
+itself, so a client sending a header of its own cannot claim to be someone
+else.
 
 ### Automatic map merging
 

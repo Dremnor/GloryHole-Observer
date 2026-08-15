@@ -1,0 +1,25 @@
+# Run behind a web server the host already has — Apache or nginx serving other
+# sites and owning ports 80 and 443, which leaves Caddy unable to bind them:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.behind-proxy.yml up -d --build
+#
+# Then point that web server at 127.0.0.1:8080 with deploy/apache.conf or
+# deploy/nginx.conf, whichever fits.
+
+services:
+  map:
+    command:
+      - -grids=/map
+      - -merge-min-overlap=2
+      # Safe for the same reason as in docker-compose.yml: the port below is
+      # bound to the loopback interface, so nothing off the host can reach it
+      # and the only X-Forwarded-For that arrives is the one the local proxy
+      # wrote.
+      - -trust-proxy-headers
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  # Not started by this override; the host's own web server terminates TLS.
+  proxy:
+    profiles:
+      - caddy

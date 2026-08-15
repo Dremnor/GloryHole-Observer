@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -139,14 +140,44 @@ func TestClientAddrIgnoresForwardedHeaderWhenUntrusted(t *testing.T) {
 	}
 }
 
-func TestClientAddrTakesFirstForwardedEntry(t *testing.T) {
+// The proxy appends what it saw, so the last entry is the only one the client
+// could not write. Taking the first meant one forged header per attempt was
+// enough to walk past the limiter.
+func TestClientAddrTakesTheEntryTheProxyAppended(t *testing.T) {
 	req := &http.Request{
 		RemoteAddr: "10.0.0.9:5555",
-		Header:     http.Header{"X-Forwarded-For": []string{"1.2.3.4, 10.0.0.1, 10.0.0.2"}},
+		Header:     http.Header{"X-Forwarded-For": []string{"1.2.3.4, 10.0.0.1, 203.0.113.7"}},
 	}
 
-	if got := clientAddr(req, true); got != "1.2.3.4" {
-		t.Errorf("expected the original client address, got %q", got)
+	if got := clientAddr(req, true); got != "203.0.113.7" {
+		t.Errorf("expected the address the proxy observed, got %q", got)
+	}
+}
+
+func TestForgedForwardedHeaderCannotWinAFreshAllowance(t *testing.T) {
+	l := &loginLimiter{
+		records: map[string]*failureRecord{},
+		max:     3,
+		window:  time.Minute,
+		now:     time.Now,
+	}
+	// One attacker behind the proxy, inventing a new "client" each time.
+	for i := 0; i < 5; i++ {
+		req := &http.Request{
+			RemoteAddr: "10.0.0.9:5555",
+			Header: http.Header{"X-Forwarded-For": []string{
+				fmt.Sprintf("198.51.100.%d, 203.0.113.7", i),
+			}},
+		}
+		l.recordFailure(clientAddr(req, true))
+	}
+
+	req := &http.Request{
+		RemoteAddr: "10.0.0.9:5555",
+		Header:     http.Header{"X-Forwarded-For": []string{"198.51.100.99, 203.0.113.7"}},
+	}
+	if l.allowed(clientAddr(req, true)) {
+		t.Error("a new forged first entry must not reset the allowance")
 	}
 }
 

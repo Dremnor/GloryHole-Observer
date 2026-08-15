@@ -98,11 +98,19 @@ func (l *loginLimiter) cleanup() {
 // consulted when the operator has confirmed a reverse proxy sits in front,
 // because anyone able to reach the port directly could otherwise forge the
 // header and get a fresh allowance on every attempt.
+//
+// The *last* entry is the one to read. Caddy, nginx and Apache all append the
+// address they saw to whatever the request already carried, so the last entry
+// is the proxy's own observation and the ones before it are the client's to
+// invent. Reading the first entry meant a single forged header defeated the
+// limiter entirely — with a proxy in front, which is exactly when the header is
+// trusted.
 func clientAddr(req *http.Request, trustProxy bool) string {
 	if trustProxy {
 		if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
-			if first := strings.TrimSpace(strings.Split(xff, ",")[0]); first != "" {
-				return first
+			parts := strings.Split(xff, ",")
+			if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
+				return last
 			}
 		}
 	}
