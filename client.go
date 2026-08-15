@@ -114,24 +114,43 @@ func (m *Map) client(rw http.ResponseWriter, req *http.Request) {
 
 func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User) {
 	defer req.Body.Close()
-	craws := map[string]struct {
+	type positionRaw struct {
 		Name   string
-		GridID string
+		GridID flexString
 		Coords struct {
-			X, Y int
+			X, Y flexInt
 		}
 		Type string
-	}{}
+	}
 	buf, err := io.ReadAll(req.Body)
 	if err != nil {
 		log.Println("Error reading position update json: ", err)
 		return
 	}
-	err = json.Unmarshal(buf, &craws)
-	if err != nil {
+	// Decoded one character at a time: a single unreadable entry should cost
+	// that character, not everyone the client reported alongside it.
+	batch := map[string]json.RawMessage{}
+	if err := json.Unmarshal(buf, &batch); err != nil {
 		log.Println("Error decoding position update json: ", err)
-		log.Println("Original json: ", string(buf))
+		log.Println("Original json: ", clip(buf))
 		return
+	}
+	craws := make(map[string]positionRaw, len(batch))
+	rejected, firstBad, firstErr := 0, "", error(nil)
+	for id, raw := range batch {
+		c := positionRaw{}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			rejected++
+			if firstErr == nil {
+				firstErr, firstBad = err, clip(raw)
+			}
+			continue
+		}
+		craws[id] = c
+	}
+	if rejected > 0 && uploadLog.allow("positionUpdate:"+userFrom(req.Context())) {
+		log.Printf("positionUpdate from %q: %d of %d characters unreadable, first: %v in %s",
+			userFrom(req.Context()), rejected, len(batch), firstErr, firstBad)
 	}
 	groups := groupArr(u.Auths)
 	m.db.View(func(tx *bbolt.Tx) error {
@@ -144,6 +163,13 @@ func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User)
 		for id, craw := range craws {
 			grid := grids.Get([]byte(craw.GridID))
 			if grid == nil {
+				// A character standing on ground nobody has uploaded yet has
+				// nowhere to be drawn. Common right after a wipe, and the one
+				// case where "players do not show up" is expected.
+				if uploadLog.allow("positionUpdate-grid:" + userFrom(req.Context())) {
+					log.Printf("positionUpdate from %q: character %q is on grid %s, which this server does not have",
+						userFrom(req.Context()), craw.Name, craw.GridID)
+				}
 				// Unknown grid: skip this character but keep processing the
 				// rest of the batch.
 				continue
@@ -156,8 +182,8 @@ func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User)
 				ID:   idnum,
 				Map:  gd.Map,
 				Position: Position{
-					X: craw.Coords.X + (gd.Coord.X * 100),
-					Y: craw.Coords.Y + (gd.Coord.Y * 100),
+					X: int(craw.Coords.X) + (gd.Coord.X * 100),
+					Y: int(craw.Coords.Y) + (gd.Coord.Y * 100),
 				},
 				Type:    craw.Type,
 				updated: time.Now(),
@@ -195,24 +221,46 @@ func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User)
 
 func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
-	markers := []struct {
+	// Type and Color are not used here, and leaving them out means a client
+	// that spells either of them differently — a colour as an object rather
+	// than a string, say — cannot stop the markers being read.
+	type markerRaw struct {
 		Name   string
-		GridID string
-		X, Y   int
+		GridID flexString
+		X, Y   flexInt
 		Image  string
-		Type   string
-		Color  string
-	}{}
+	}
 	buf, err := io.ReadAll(req.Body)
 	if err != nil {
 		log.Println("Error reading marker json: ", err)
 		return
 	}
-	err = json.Unmarshal(buf, &markers)
-	if err != nil {
+	// One marker at a time, for the same reason as the position update: an
+	// unreadable entry used to discard the whole upload, which is how a marker
+	// type can be missing from the map while others from the same client are
+	// there.
+	raws := []json.RawMessage{}
+	if err := json.Unmarshal(buf, &raws); err != nil {
 		log.Println("Error decoding marker json: ", err)
-		log.Println("Original json: ", string(buf))
+		log.Println("Original json: ", clip(buf))
 		return
+	}
+	markers := make([]markerRaw, 0, len(raws))
+	rejected, firstBad, firstErr := 0, "", error(nil)
+	for _, raw := range raws {
+		mr := markerRaw{}
+		if err := json.Unmarshal(raw, &mr); err != nil {
+			rejected++
+			if firstErr == nil {
+				firstErr, firstBad = err, clip(raw)
+			}
+			continue
+		}
+		markers = append(markers, mr)
+	}
+	if rejected > 0 && uploadLog.allow("markerUpdate:"+userFrom(req.Context())) {
+		log.Printf("markerUpdate from %q: %d of %d markers unreadable, first: %v in %s",
+			userFrom(req.Context()), rejected, len(raws), firstErr, firstBad)
 	}
 	err = m.db.Update(func(tx *bbolt.Tx) error {
 		mb, err := tx.CreateBucketIfNotExists([]byte("markers"))
@@ -229,15 +277,16 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 		}
 
 		for _, mraw := range markers {
-			if !validGridID.MatchString(mraw.GridID) {
-				log.Printf("markerUpdate from %q: skipping marker with invalid grid id %q",
-					userFrom(req.Context()), mraw.GridID)
+			gridID := string(mraw.GridID)
+			if !validGridID.MatchString(gridID) {
+				log.Printf("markerUpdate from %q: skipping marker %q with invalid grid id %q",
+					userFrom(req.Context()), mraw.Name, gridID)
 				continue
 			}
 			if mraw.Image == "" {
 				mraw.Image = "gfx/terobjs/mm/custom"
 			}
-			key := []byte(fmt.Sprintf("%s_%d_%d", mraw.GridID, mraw.X, mraw.Y))
+			key := []byte(fmt.Sprintf("%s_%d_%d", gridID, mraw.X, mraw.Y))
 			if existing := grid.Get(key); existing != nil {
 				// A marker used to be written once and never touched again, so a
 				// rename or a changed icon in game never reached the map. Update
@@ -269,10 +318,10 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 			m := Marker{
 				Name:   mraw.Name,
 				ID:     int(id),
-				GridID: mraw.GridID,
+				GridID: gridID,
 				Position: Position{
-					X: mraw.X,
-					Y: mraw.Y,
+					X: int(mraw.X),
+					Y: int(mraw.Y),
 				},
 				Image: mraw.Image,
 			}
