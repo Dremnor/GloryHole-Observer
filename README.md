@@ -216,6 +216,7 @@ docker compose logs -f map
 
 | Log line | What it means |
 | --- | --- |
+| `markerUpdate from "x": 1 new, 0 updated (gfx/terobjs/mm/thingwall)` | A marker was stored, named by its image. Nothing is logged when an upload repeats markers already held, so silence means the client is sending nothing new — not that it is failing. |
 | `markerUpdate from "x": 3 of 40 markers unreadable` | The client sent a field in a shape this server cannot decode. The rest of the batch was stored; the line quotes the first offending marker. |
 | `positionUpdate from "x": 1 of 4 characters unreadable` | Same, for character positions. |
 | `character "N" is on grid G, which this server does not have` | Nobody has uploaded that ground yet, so there is nowhere to draw them. |

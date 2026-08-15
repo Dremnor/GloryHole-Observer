@@ -272,7 +272,14 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 		log.Printf("markerUpdate from %q: %d of %d markers unreadable, first: %v in %s",
 			userFrom(req.Context()), rejected, len(raws), firstErr, firstBad)
 	}
+	// A successful upload used to be silent, so "is my marker getting through?"
+	// had no answer short of reading the database. Counted here and reported
+	// below, only when something actually changed.
+	stored, changed := 0, 0
+	newImages := map[string]bool{}
 	err = m.db.Update(func(tx *bbolt.Tx) error {
+		stored, changed = 0, 0
+		clear(newImages)
 		mb, err := tx.CreateBucketIfNotExists([]byte("markers"))
 		if err != nil {
 			return err
@@ -318,6 +325,7 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 				if err := grid.Put(key, raw); err != nil {
 					return err
 				}
+				changed++
 				continue
 			}
 			id, err := idB.NextSequence()
@@ -338,6 +346,8 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 			raw, _ := json.Marshal(m)
 			grid.Put(key, raw)
 			idB.Put(idKey, key)
+			stored++
+			newImages[mraw.Image] = true
 		}
 		return nil
 	})
@@ -345,6 +355,24 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 		log.Println("Error update db: ", err)
 		return
 	}
+	if stored > 0 || changed > 0 {
+		log.Printf("markerUpdate from %q: %d new, %d updated%s",
+			userFrom(req.Context()), stored, changed, imageList(newImages))
+	}
+}
+
+// imageList names the images of newly stored markers, so the log says which
+// kind of marker just arrived rather than only how many.
+func imageList(images map[string]bool) string {
+	if len(images) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(images))
+	for img := range images {
+		names = append(names, img)
+	}
+	sort.Strings(names)
+	return " (" + strings.Join(names, ", ") + ")"
 }
 
 func (m *Map) locate(rw http.ResponseWriter, req *http.Request) {
