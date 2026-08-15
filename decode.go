@@ -62,6 +62,92 @@ func (f *flexString) UnmarshalJSON(b []byte) error {
 	return fmt.Errorf("%s is neither a string nor a number", clip(b))
 }
 
+// Some clients write a marker's id as a bare hexadecimal token:
+//
+//	{"image":"gfx/terobjs/mm/thingwall","name":"Lintreath",…,"id":6a7f4d30000008f5,"type":"shared"}
+//
+// That is not JSON — the value is neither a number nor a quoted string — so the
+// document cannot even be split into entries, and every marker in the upload is
+// lost along with the one carrying it. Shared markers are exactly the ones a
+// group cares about, and the field is one this server does not read.
+//
+// repairLooseJSON quotes any bare token sitting where a value belongs and
+// leaves valid JSON untouched. It runs only after a strict parse has failed, so
+// a well-formed upload never goes near it.
+func repairLooseJSON(b []byte) []byte {
+	out := make([]byte, 0, len(b)+16)
+	inString, escaped := false, false
+	for i := 0; i < len(b); {
+		c := b[i]
+		if inString {
+			out = append(out, c)
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			i++
+			continue
+		}
+		if c == '"' {
+			inString = true
+			out = append(out, c)
+			i++
+			continue
+		}
+		if isJSONStructural(c) || isJSONSpace(c) {
+			out = append(out, c)
+			i++
+			continue
+		}
+		j := i
+		for j < len(b) && !isJSONStructural(b[j]) && !isJSONSpace(b[j]) && b[j] != '"' {
+			j++
+		}
+		tok := b[i:j]
+		// json.Valid covers every bare token JSON actually allows: a number,
+		// true, false and null.
+		if json.Valid(tok) {
+			out = append(out, tok...)
+		} else {
+			out = append(out, '"')
+			for _, t := range tok {
+				if t == '\\' {
+					out = append(out, '\\')
+				}
+				out = append(out, t)
+			}
+			out = append(out, '"')
+		}
+		i = j
+	}
+	return out
+}
+
+func isJSONStructural(c byte) bool {
+	return c == '{' || c == '}' || c == '[' || c == ']' || c == ',' || c == ':'
+}
+
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// decodeLoose parses v from b, retrying through repairLooseJSON if the strict
+// parse fails. The bool reports whether the repair was needed, so the caller
+// can say so once rather than silently accepting broken uploads forever.
+func decodeLoose(b []byte, v interface{}) (bool, error) {
+	if err := json.Unmarshal(b, v); err == nil {
+		return false, nil
+	} else if repaired := repairLooseJSON(b); json.Unmarshal(repaired, v) == nil {
+		return true, nil
+	} else {
+		return false, err
+	}
+}
+
 // clip shortens a value for a log line. Upload bodies carry hundreds of entries
 // and the interesting part is always at the front.
 func clip(b []byte) string {

@@ -131,7 +131,7 @@ func TestLogThrottleDoesNotGrowWithoutBound(t *testing.T) {
 	l.now = func() time.Time { return now }
 
 	for i := 0; i < 500; i++ {
-		l.allow(string(rune('a' + i%26)) + strings.Repeat("x", i))
+		l.allow(string(rune('a'+i%26)) + strings.Repeat("x", i))
 	}
 	now = now.Add(2 * time.Minute)
 	l.allow("trigger the prune")
@@ -149,5 +149,104 @@ func TestClipKeepsLogLinesShort(t *testing.T) {
 	short := []byte(`{"x":1}`)
 	if clip(short) != `{"x":1}` { //nolint
 		t.Errorf("a short value must be logged as it is, got %q", clip(short))
+	}
+}
+
+// The exact body a client sent to the live server, which cost every marker in
+// the upload: the id is a bare hexadecimal token, so the document could not be
+// tokenised at all and even splitting it into entries failed.
+const thingwallUpload = `[{"image":"gfx/terobjs/mm/thingwall","name":"Lintreath","x":36,"y":9,"gridID":"-8514535794887855825","id":6a7f4d30000008f5,"type":"shared"}]`
+
+func TestSharedMarkerWithABareHexIDIsRead(t *testing.T) {
+	type markerRaw struct {
+		Name   string
+		GridID flexString
+		X, Y   flexInt
+		Image  string
+	}
+	var raws []json.RawMessage
+	if _, err := decodeLoose([]byte(thingwallUpload), &raws); err != nil {
+		t.Fatalf("the upload should be readable: %v", err)
+	}
+	if len(raws) != 1 {
+		t.Fatalf("got %d markers, want 1", len(raws))
+	}
+	m := markerRaw{}
+	if err := json.Unmarshal(raws[0], &m); err != nil {
+		t.Fatalf("decoding the marker: %v", err)
+	}
+	if m.Image != "gfx/terobjs/mm/thingwall" || m.Name != "Lintreath" {
+		t.Errorf("got %q at %q, want the thingwall", m.Name, m.Image)
+	}
+	if m.X != 36 || m.Y != 9 || string(m.GridID) != "-8514535794887855825" {
+		t.Errorf("position came out as %d,%d on grid %q", m.X, m.Y, m.GridID)
+	}
+}
+
+func TestDecodeLooseReportsWhetherItHadToRepair(t *testing.T) {
+	var v []json.RawMessage
+	if repaired, err := decodeLoose([]byte(`[{"a":1}]`), &v); err != nil || repaired {
+		t.Errorf("valid JSON must parse untouched, got repaired=%v err=%v", repaired, err)
+	}
+	if repaired, err := decodeLoose([]byte(thingwallUpload), &v); err != nil || !repaired {
+		t.Errorf("the broken upload must be reported as repaired, got repaired=%v err=%v", repaired, err)
+	}
+	if _, err := decodeLoose([]byte(`[{"a":`), &v); err == nil {
+		t.Error("genuinely truncated JSON must still be an error")
+	}
+}
+
+// The repair must not touch anything that is already valid, and must not reach
+// inside strings — a marker name is player-supplied text.
+func TestRepairLeavesValidJSONExactlyAsItWas(t *testing.T) {
+	for _, in := range []string{
+		`{"a":1,"b":-2.5e3,"c":true,"d":null,"e":"txt","f":[1,2],"g":{"h":false}}`,
+		`[{"name":"a, b: 6a7f4d3","x":1}]`,
+		`{"name":"quote \" and backslash \\ inside"}`,
+		`  [ 1 , 2 ]  `,
+		`[]`,
+		``,
+	} {
+		if got := string(repairLooseJSON([]byte(in))); got != in {
+			t.Errorf("repair changed valid input\n  in:  %s\n  out: %s", in, got)
+		}
+	}
+}
+
+func TestRepairQuotesBareTokensOutsideStrings(t *testing.T) {
+	cases := map[string]string{
+		`{"id":6a7f4d30000008f5}`:  `{"id":"6a7f4d30000008f5"}`,
+		`{"id":deadbeef,"x":1}`:    `{"id":"deadbeef","x":1}`,
+		`[0x1f]`:                   `["0x1f"]`,
+		`{"a":undefined,"b":null}`: `{"a":"undefined","b":null}`,
+	}
+	for in, want := range cases {
+		got := string(repairLooseJSON([]byte(in)))
+		if got != want {
+			t.Errorf("repair(%s) = %s, want %s", in, got, want)
+		}
+		if !json.Valid([]byte(got)) {
+			t.Errorf("repair(%s) produced invalid JSON: %s", in, got)
+		}
+	}
+}
+
+// A name containing something that looks like a broken value must not let the
+// repair rewrite the document around it.
+func TestRepairIsNotFooledByStringContents(t *testing.T) {
+	in := `[{"name":"weird \"quoted\" }{ id:6a7f","image":"gfx/x"},{"id":6a7f,"image":"gfx/y"}]`
+	out := repairLooseJSON([]byte(in))
+	if !json.Valid(out) {
+		t.Fatalf("repair produced invalid JSON: %s", out)
+	}
+	var got []struct {
+		Name  string
+		Image string
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("decoding the repaired document: %v", err)
+	}
+	if len(got) != 2 || got[0].Name != `weird "quoted" }{ id:6a7f` || got[1].Image != "gfx/y" {
+		t.Errorf("repair altered the contents: %+v", got)
 	}
 }

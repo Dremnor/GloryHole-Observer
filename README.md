@@ -220,6 +220,14 @@ docker compose logs -f map
 | `positionUpdate from "x": 1 of 4 characters unreadable` | Same, for character positions. |
 | `character "N" is on grid G, which this server does not have` | Nobody has uploaded that ground yet, so there is nowhere to draw them. |
 | `skipping marker "N" with invalid grid id` | The grid ID was not something that can be used as a file name. |
+| `client sent invalid JSON; read it anyway` | The upload was not valid JSON and was repaired before parsing — see below. Nothing was lost. |
+
+Some clients write a shared marker's id as a bare hexadecimal token
+(`"id":6a7f4d30000008f5`), which is not JSON: the value is neither a number nor
+a quoted string. The document could not be parsed at all, so **every marker in
+that upload was discarded** — shared markers such as thingwalls simply never
+appeared, while markers from other uploads did. Uploads that fail to parse are
+now repaired by quoting bare tokens and read normally.
 
 Nothing in the log and still nothing on the map? Then it is a matter of what
 each account is allowed to see:

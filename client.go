@@ -130,10 +130,15 @@ func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User)
 	// Decoded one character at a time: a single unreadable entry should cost
 	// that character, not everyone the client reported alongside it.
 	batch := map[string]json.RawMessage{}
-	if err := json.Unmarshal(buf, &batch); err != nil {
+	repaired, err := decodeLoose(buf, &batch)
+	if err != nil {
 		log.Println("Error decoding position update json: ", err)
 		log.Println("Original json: ", clip(buf))
 		return
+	}
+	if repaired && uploadLog.allow("positionUpdate-repair:"+userFrom(req.Context())) {
+		log.Printf("positionUpdate from %q: client sent invalid JSON; read it anyway — %s",
+			userFrom(req.Context()), clip(buf))
 	}
 	craws := make(map[string]positionRaw, len(batch))
 	rejected, firstBad, firstErr := 0, "", error(nil)
@@ -240,10 +245,15 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 	// type can be missing from the map while others from the same client are
 	// there.
 	raws := []json.RawMessage{}
-	if err := json.Unmarshal(buf, &raws); err != nil {
+	repaired, err := decodeLoose(buf, &raws)
+	if err != nil {
 		log.Println("Error decoding marker json: ", err)
 		log.Println("Original json: ", clip(buf))
 		return
+	}
+	if repaired && uploadLog.allow("markerUpdate-repair:"+userFrom(req.Context())) {
+		log.Printf("markerUpdate from %q: client sent invalid JSON; read it anyway — %s",
+			userFrom(req.Context()), clip(buf))
 	}
 	markers := make([]markerRaw, 0, len(raws))
 	rejected, firstBad, firstErr := 0, "", error(nil)
