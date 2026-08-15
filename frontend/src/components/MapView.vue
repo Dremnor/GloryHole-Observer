@@ -69,6 +69,9 @@
               <v-btn class="short-btn" width="100%" @click="showMarkers = !showMarkers">
                 {{ (!showMarkers) ? 'Show' : 'Hide' }} Markers
               </v-btn>
+              <div v-if="!canSeeMarkers" class="role-note">
+                Your account has no <code>markers</code> role, so the server sends none.
+              </div>
             </v-list-item-title>
           </v-list-item-content>
         </v-list-item>
@@ -194,6 +197,14 @@
               <v-btn class="short-btn" width="100%" @click="showPlayers = !showPlayers">
                 {{ (!showPlayers) ? 'Show' : 'Hide' }} Players
               </v-btn>
+              <div v-if="!canSeePlayers" class="role-note">
+                Your account has no <code>point</code> role, so the server sends no
+                characters.
+              </div>
+              <div v-else-if="showPlayers && !players.length" class="role-note">
+                Nobody is online, or the accounts uploading them are in a
+                <code>g1</code>&ndash;<code>g5</code> group yours does not share.
+              </div>
             </v-list-item-title>
           </v-list-item-content>
         </v-list-item>
@@ -413,6 +424,15 @@ export default {
         prefs[k] = this[k];
       });
       return prefs;
+    },
+    // Characters and markers are withheld by role, and until now the only sign
+    // of that was a toggle that did nothing. The server sends the session's
+    // roles with the rest of the config, so say which one is missing.
+    canSeePlayers() {
+      return this.auths.length === 0 || this.auths.includes('point');
+    },
+    canSeeMarkers() {
+      return this.auths.length === 0 || this.auths.includes('markers');
     }
   },
   watch: {
@@ -1066,6 +1086,18 @@ export default {
 .cat-count {
   opacity: 0.6;
   font-size: 11px;
+}
+
+.role-note {
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.75;
+  padding: 3px 4px 1px;
+}
+
+.role-note code {
+  font-size: 11px;
+  padding: 0 2px;
 }
 
 .v-list {

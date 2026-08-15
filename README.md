@@ -147,6 +147,36 @@ at 18 px, so larger images only help on high-density displays.
 To ship an icon permanently instead, put it under `frontend/public/` at the same
 path and rebuild.
 
+## When something does not show up on the map
+
+The server logs what it could not read, so start there:
+
+```sh
+docker compose logs -f map
+```
+
+| Log line | What it means |
+| --- | --- |
+| `markerUpdate from "x": 3 of 40 markers unreadable` | The client sent a field in a shape this server cannot decode. The rest of the batch was stored; the line quotes the first offending marker. |
+| `positionUpdate from "x": 1 of 4 characters unreadable` | Same, for character positions. |
+| `character "N" is on grid G, which this server does not have` | Nobody has uploaded that ground yet, so there is nowhere to draw them. |
+| `skipping marker "N" with invalid grid id` | The grid ID was not something that can be used as a file name. |
+
+Nothing in the log and still nothing on the map? Then it is a matter of what
+each account is allowed to see:
+
+- **No markers at all** — the account needs the `markers` role.
+- **No players** — the account needs `point`. Characters also carry the
+  visibility group of whoever uploaded them, so an account in no `g1`–`g5`
+  group sees nothing from an uploader that is in one. The map says which of
+  these applies next to the relevant switch.
+- **One marker type missing while others are there** — the type has never
+  reached the server. **Admin portal → Manage icons** lists every image key in
+  the database with a count, which is the quickest way to confirm it.
+
+Each of these lines is written at most once a minute per uploading account, so
+a client repeating a bad field cannot fill the disk.
+
 ## Configuration
 
 Flags, all optional:
@@ -204,6 +234,11 @@ cd frontend && npm ci && npm run build   # frontend into frontend/dist
 The frontend dev server (`npm run serve`) mocks the API with miragejs, so it
 runs without a backend.
 
+Leaflet, its marker images, the interface font and the icon font are part of the
+build, so the map page loads nothing from a third party. The login and admin
+pages, which are Go templates rather than part of the Vue app, still fetch
+Materialize and the Material Icons font from a CDN.
+
 ## Notes on upgrading an existing install
 
 - The container now runs as UID 10001 instead of root. A named volume picks
@@ -213,3 +248,6 @@ runs without a backend.
   marker, set coordinates, generate token) now require POST. Any bookmarks or
   scripts calling them over GET will get `405`.
 - Changing a password now requires the current one.
+- Marker and position uploads are decoded one entry at a time. A batch that used
+  to be discarded whole because of one odd value now stores everything else, so
+  marker types that never appeared may start turning up on their own.
