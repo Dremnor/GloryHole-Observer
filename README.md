@@ -74,7 +74,17 @@ refuses to load — and certbot cannot repair it, because it runs
 `http://` first, then run certbot.
 
 If Apache already serves that hostname from another virtual host, disable it
-(`a2dissite <name>`) or the two will fight over the same `ServerName`.
+(`a2dissite <name>`) or the two will fight over the same `ServerName` — and
+certbot may well extend the *other* one, leaving TLS pointed somewhere else.
+
+`apache2ctl -S | grep your.domain` is the check. Exactly one entry per port,
+both naming this site. A missing `port 443` entry does not fail loudly: Apache
+answers with whichever virtual host is first for that port, so the domain
+serves an unrelated site rather than an error.
+
+Already have the certificate and would rather write the TLS virtual host than
+let certbot rewrite things? Use `deploy/apache-ssl.conf` in place of
+`deploy/apache.conf` — same proxy settings, TLS block filled in.
 
 Both configs get two details right that fail quietly otherwise: the live tile
 feed is Server-Sent Events, so it must not be buffered (`flushpackets=on` in
