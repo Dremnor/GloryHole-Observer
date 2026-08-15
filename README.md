@@ -48,8 +48,15 @@ Put the map behind that web server instead:
 docker compose -f docker-compose.yml -f docker-compose.behind-proxy.yml up -d --build
 ```
 
-That publishes the map on `127.0.0.1:8080` and leaves Caddy out. Then use
-`deploy/apache.conf` or `deploy/nginx.conf` as the virtual host:
+That publishes the map on `127.0.0.1:8080` and leaves Caddy out. Make it the
+default for this checkout, so a later plain `docker compose up -d` cannot
+quietly put Caddy back and stop publishing the port:
+
+```sh
+echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.behind-proxy.yml' > .env
+```
+
+Then use `deploy/apache.conf` or `deploy/nginx.conf` as the virtual host:
 
 ```sh
 a2enmod proxy proxy_http headers ssl

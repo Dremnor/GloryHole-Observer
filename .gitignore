@@ -1,3 +1,6 @@
 hnh-map.exe
 hnh-map
 grids/
+
+# Local compose selection (COMPOSE_FILE=...), not shared between hosts.
+.env
