@@ -49,8 +49,25 @@ docker compose -f docker-compose.yml -f docker-compose.behind-proxy.yml up -d --
 ```
 
 That publishes the map on `127.0.0.1:8080` and leaves Caddy out. Then use
-`deploy/apache.conf` or `deploy/nginx.conf` as the virtual host, with the
-certificate from `certbot --apache` or `certbot --nginx`.
+`deploy/apache.conf` or `deploy/nginx.conf` as the virtual host:
+
+```sh
+a2enmod proxy proxy_http headers ssl
+cp deploy/apache.conf /etc/apache2/sites-available/gloryhole-observer.conf
+sed -i 's/map\.example\.com/your.domain/' /etc/apache2/sites-available/gloryhole-observer.conf
+a2ensite gloryhole-observer && systemctl reload apache2
+certbot --apache -d your.domain
+```
+
+`deploy/apache.conf` is plain HTTP on purpose: certbot copies it into a TLS
+virtual host of its own and turns this one into a redirect. Shipping a TLS
+block up front would name a certificate that does not exist yet, which Apache
+refuses to load — and certbot cannot repair it, because it runs
+`apache2ctl configtest` before doing anything. Reload and check the site over
+`http://` first, then run certbot.
+
+If Apache already serves that hostname from another virtual host, disable it
+(`a2dissite <name>`) or the two will fight over the same `ServerName`.
 
 Both configs get two details right that fail quietly otherwise: the live tile
 feed is Server-Sent Events, so it must not be buffered (`flushpackets=on` in
