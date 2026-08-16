@@ -831,10 +831,6 @@ export default {
             return ch;
           }),
           (character) => { // Add
-            if (this.showPlayers) {
-              character.add(this);
-              character.tooltip(this.showPlayerTooltips);
-            }
             character.setClickCallback(() => { // Zoom to character on marker click
               this.trackingCharacterId = character.id;
             });
@@ -853,6 +849,10 @@ export default {
             character.update(this, updated);
           }
       );
+      // Drawing is decided here rather than in the callbacks above, so a
+      // character that has just changed map is added or removed by the same
+      // rule as one the viewer has toggled.
+      this.applyCharacterVisibility();
       this.players.length = 0;
       this.characters.getElements().forEach(it => this.players.push(it));
     },

@@ -49,20 +49,24 @@ export class Character {
             // });
             this.marker.on("click", this.callCallback.bind(this));
             this.marker.addTo(mapview.map);
-            this.unbindTooltip();
+            // A permanent tooltip opens the moment it is bound, so this used to
+            // close it unconditionally and leave the caller to reopen it. Every
+            // path that redraws a character — walking into a cave and back out,
+            // most often — went through here without reopening, so the name
+            // vanished until the page was reloaded. Restore the state this
+            // character already has instead.
+            this.tooltip(this.tstate);
         }
     }
 
+    // Only the character's own data. Whether it belongs on the map at all is
+    // decided in one place by the view, so an update cannot put back a
+    // character the viewer has switched off, or drop the name off one that is
+    // already drawn.
     update(mapview, updated) {
-        if (this.map !== updated.map) {
-            this.remove(mapview);
-        }
         this.map = updated.map;
         this.position = updated.position;
-        if (!this.marker && this.map === mapview.mapid) {
-            this.add(mapview);
-        }
-        if (this.marker) {
+        if (this.marker && this.map === mapview.mapid) {
             let position = mapview.map.unproject([updated.position.x, updated.position.y], HnHMaxZoom);
             this.marker.setLatLng(position);
         }
