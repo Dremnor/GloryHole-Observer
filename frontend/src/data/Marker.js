@@ -87,30 +87,8 @@ export class Marker {
 
             let position = this.view.unproject([this.position.x, this.position.y], HnHMaxZoom);
             this.marker = L.marker(position, {icon: icon, riseOnHover: true/*, title: this.name*/});
-            let col = "#FFF";
-            if (this.type === "quest") {
-                col = "#FDB800";
-            } else if (this.type === "thingwall") {
-                col = "#00cffd";
-            } else if (this.type === "waypoint") {
-                col = "#FFD24A";
-            }
             this.marker.marker = this;
-            this.marker.bindTooltip("<div style='color:" + col + ";'><b>" + this.name + "</b></div>", {
-                permanent: false,
-                direction: 'top',
-                // Leaflet ignores an icon's tooltipAnchor whenever the tooltip
-                // is sticky, so a pin's label would sit on top of the pin. The
-                // other markers are small and centred on their point, where
-                // sticky costs nothing.
-                sticky: this.type !== "waypoint",
-                opacity: 0.9
-            });
-            this.marker.on('mouseout', function (ev) {
-                if (ev.target.marker.tstate) {
-                    ev.target.openTooltip();
-                }
-            });
+            this.applyTooltip();
             // this.marker.bindPopup(this.name);
             // this.marker.on('mouseover', function(ev) {
             //     ev.target.openPopup();
@@ -151,33 +129,53 @@ export class Marker {
         }
     }
 
+    // Leaflet closes every tooltip that is not permanent when the map is
+    // clicked, so a name meant to stay on the map cannot simply be opened by
+    // hand — it has to be bound as permanent. That flag is fixed at bind time,
+    // which is why switching a label on or off rebinds the tooltip.
+    applyTooltip() {
+        if (!this.marker) {
+            return;
+        }
+        let col = "#FFF";
+        if (this.type === "quest") {
+            col = "#FDB800";
+        } else if (this.type === "thingwall") {
+            col = "#00cffd";
+        } else if (this.type === "waypoint") {
+            col = "#FFD24A";
+        }
+        this.marker.unbindTooltip();
+        this.marker.bindTooltip("<div style='color:" + col + ";'><b>" + this.name + "</b></div>", {
+            permanent: this.tstate,
+            direction: 'top',
+            // Sticky makes a tooltip follow the cursor, which only means
+            // anything while hovering, and Leaflet ignores the icon's anchor
+            // whenever it is set — which would drop a pin's label onto the pin.
+            sticky: !this.tstate && this.type !== "waypoint",
+            opacity: 0.9
+        });
+    }
+
     tooltipState(value) {
         this.tstate = value;
     }
 
     bindTooltip() {
         this.tstate = true;
-        if (this.marker) {
-            this.marker.openTooltip();
-        }
+        this.applyTooltip();
     }
 
     unbindTooltip() {
         this.tstate = false;
-        if (this.marker) {
-            this.marker.closeTooltip();
-        }
+        this.applyTooltip();
     }
 
     tooltip(value) {
-        try {
-            console.log(this.name + " " + value);
-            if (value)
-                this.bindTooltip();
-            else
-                this.unbindTooltip();
-        } catch (e) {
-            console.log(e);
+        if (value) {
+            this.bindTooltip();
+        } else {
+            this.unbindTooltip();
         }
     }
 
