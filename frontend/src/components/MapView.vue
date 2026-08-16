@@ -16,6 +16,18 @@
         <span v-if="!mini" class="side-head-title">{{ title }}</span>
       </div>
 
+      <!-- COLLAPSED: on/off only, everything else lives in the open panel -->
+      <div v-if="mini" class="side-rail">
+        <v-btn v-for="t in railToggles" :key="t.key"
+               icon small
+               :disabled="!railEnabled(t)"
+               :title="railTitle(t)"
+               :class="['rail-btn', {'rail-btn--on': railOn(t)}]"
+               @click.stop="toggleRail(t)">
+          <v-icon>{{ railOn(t) ? t.icon : t.iconOff }}</v-icon>
+        </v-btn>
+      </div>
+
       <div v-if="!mini" class="side-body">
 
         <!-- FIND A WAYPOINT -->
@@ -180,6 +192,15 @@ import VueContext from 'vue-context';
 // themselves survives a reload.
 const PREFS_KEY = 'hnhmap.viewPrefs';
 
+// The four switches the collapsed rail carries, in the order asked for. On and
+// off only — anything with settings behind it stays in the open panel.
+const RAIL_TOGGLES = [
+  {key: 'showMarkers', label: 'Markers', icon: 'mdi-map-marker', iconOff: 'mdi-map-marker-off'},
+  {key: 'showThingwalls', label: 'Thingwalls', icon: 'mdi-pillar', iconOff: 'mdi-pillar'},
+  {key: 'showQuests', label: 'Quest givers', icon: 'mdi-exclamation-thick', iconOff: 'mdi-exclamation-thick'},
+  {key: 'showPlayers', label: 'Players', icon: 'mdi-account-group', iconOff: 'mdi-account-off'}
+];
+
 // How many waypoints the search offers at once. Enough to browse, few enough
 // that opening the menu on a large map stays instant.
 const WAYPOINT_LIMIT = 200;
@@ -293,6 +314,9 @@ export default {
     },
     canSeeMarkers() {
       return this.auths.length === 0 || this.auths.includes('markers');
+    },
+    railToggles() {
+      return RAIL_TOGGLES;
     },
     // Matched here rather than by the autocomplete's own filter, which only
     // looks at the displayed name — searching for "cave" should find every
@@ -817,6 +841,22 @@ export default {
         }
       }, 50);
     },
+    railOn(toggle) {
+      return this[toggle.key];
+    },
+    // Thingwalls and quest givers are markers, so all three need the same role.
+    railEnabled(toggle) {
+      return toggle.key === 'showPlayers' ? this.canSeePlayers : this.canSeeMarkers;
+    },
+    railTitle(toggle) {
+      if (!this.railEnabled(toggle)) {
+        return `${toggle.label} — your account cannot see these`;
+      }
+      return `${toggle.label} — ${this.railOn(toggle) ? 'on' : 'off'}`;
+    },
+    toggleRail(toggle) {
+      this[toggle.key] = !this[toggle.key];
+    },
     // The autocomplete filters on the displayed name alone; waypointMatches
     // has already matched on name and type, so let everything through.
     alwaysMatch() {
@@ -991,6 +1031,25 @@ export default {
   height: calc(100% - 48px);
   overflow-y: auto;
   padding: 4px 12px 24px;
+}
+
+/* Collapsed panel: the four things worth reaching without opening it. An icon
+   that is off is outlined and faded, so the state reads at a glance rather
+   than only on hover. */
+.side-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+}
+
+.side .rail-btn .v-icon {
+  color: rgba(0, 0, 0, 0.38);
+}
+
+.side .rail-btn--on .v-icon {
+  color: #1976d2;
 }
 
 .side-section {
