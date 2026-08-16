@@ -1344,3 +1344,61 @@ var (
 	errNoGridThere = errors.New("no grid at that position")
 	errMarkerThere = errors.New("a marker already exists there")
 )
+
+// deleteMarker removes a marker outright, unlike hideMarker which only flags it
+// and leaves the row behind for good.
+func (m *Map) deleteMarker(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
+	s := m.getSession(req)
+	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
+		http.Error(rw, "not allowed", http.StatusForbidden)
+		return
+	}
+	id := req.FormValue("id")
+	if id == "" {
+		http.Error(rw, "which marker?", http.StatusBadRequest)
+		return
+	}
+	name := ""
+	err := m.db.Update(func(tx *bbolt.Tx) error {
+		mb := tx.Bucket([]byte("markers"))
+		if mb == nil {
+			return errNoSuchMarker
+		}
+		grid := mb.Bucket([]byte("grid"))
+		idB := mb.Bucket([]byte("id"))
+		if grid == nil || idB == nil {
+			return errNoSuchMarker
+		}
+		key := idB.Get([]byte(id))
+		if key == nil {
+			return errNoSuchMarker
+		}
+		if raw := grid.Get(key); raw != nil {
+			existing := Marker{}
+			if json.Unmarshal(raw, &existing) == nil {
+				name = existing.Name
+			}
+			if err := grid.Delete(key); err != nil {
+				return err
+			}
+		}
+		return idB.Delete([]byte(id))
+	})
+	switch err {
+	case nil:
+	case errNoSuchMarker:
+		http.Error(rw, "there is no such marker", http.StatusNotFound)
+		return
+	default:
+		log.Println("Error deleting marker: ", err)
+		http.Error(rw, "could not delete the marker", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("%q deleted marker %s %q", s.Username, id, name)
+	rw.WriteHeader(http.StatusOK)
+}
+
+var errNoSuchMarker = errors.New("no marker with that id")

@@ -191,8 +191,17 @@ game client uploaded.
 The marker is stored against the grid it sits on, like every other marker, so
 merging two maps carries it along with the tiles instead of leaving it behind.
 Two consequences: ground nobody has mapped yet cannot hold one, and a spot that
-already has a marker is refused rather than quietly overwritten. Remove one the
-same way as any other marker — right-click it and hide it.
+already has a marker is refused rather than quietly overwritten.
+
+Right-click a marker to remove it. What that offers depends on where the marker
+came from:
+
+| Marker | Offered | Why |
+| --- | --- | --- |
+| Placed here | **Delete** | Nothing would ever bring it back, so hiding it would leave a row nobody can restore. |
+| From a game client | **Hide**, and **Delete** | Hiding is usually what you want: a deleted one reappears the next time a client walks past it. |
+
+Deleting frees the spot, so a replacement can go in the same place.
 
 Its icon is `gfx/hnhmap/waypoint`, a normal image like the rest, so **Manage
 icons** lists it and a different pin can be uploaded there.

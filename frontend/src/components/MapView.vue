@@ -155,8 +155,15 @@
 
         <vue-context ref="markermenu">
           <template slot-scope="data" v-if="data.data">
-            <li>
+            <!-- Hiding is what a client-uploaded marker needs: deleting one
+                 only invites it back on the client's next pass. A marker placed
+                 here has no client behind it, so hiding it would leave a row
+                 nobody can bring back. -->
+            <li v-if="!data.data.waypoint">
               <a @click.prevent="hideMarker(data.data)">Hide marker {{ data.data.name }}</a>
+            </li>
+            <li>
+              <a @click.prevent="deleteMarker(data.data)">Delete marker {{ data.data.name }}</a>
             </li>
           </template>
         </vue-context>
@@ -695,7 +702,9 @@ export default {
             });
             marker.setContextMenu((mev) => {
               if (this.auths.includes('admin') || this.auths.includes('writer')) {
-                this.$refs.markermenu.open(mev.originalEvent, {name: marker.name, id: marker.id});
+                this.$refs.markermenu.open(mev.originalEvent, {
+                  name: marker.name, id: marker.id, waypoint: marker.type === "waypoint"
+                });
               }
             });
           },
@@ -975,8 +984,20 @@ export default {
       this.$http.post(`${API_ENDPOINT}/admin/wipeTile`, null, {params: {...data.coords, map: this.mapid}});
     },
     hideMarker(data) {
-      this.$http.post(`${API_ENDPOINT}/admin/hideMarker`, null, {params: {id: data.id}});
-      this.markers.byId(data.id).remove(this);
+      this.$http.post(`${API_ENDPOINT}/admin/hideMarker`, null, {params: {id: data.id}})
+          .then(() => this.refreshMarkers());
+      const marker = this.markers.byId(data.id);
+      if (marker) {
+        marker.remove(this);
+      }
+    },
+    deleteMarker(data) {
+      this.$http.post(`${API_ENDPOINT}/admin/deleteMarker`, null, {params: {id: data.id}})
+          .then(() => this.refreshMarkers());
+      const marker = this.markers.byId(data.id);
+      if (marker) {
+        marker.remove(this);
+      }
     },
     queryCoordSet(data) {
       this.coordSetFrom = data.coords;
