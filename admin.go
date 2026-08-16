@@ -1177,3 +1177,170 @@ func (m *Map) adminMap(rw http.ResponseWriter, req *http.Request) {
 		MapInfo: mi,
 	})
 }
+
+// WaypointImage is the icon admin-placed markers use. It is a real file under
+// frontend/public like every other marker image, so the icon panel lists it and
+// an admin can replace it there without touching the code.
+const WaypointImage = "gfx/hnhmap/waypoint"
+
+const maxMarkerNameLen = 80
+
+// GridSize is the side of one grid in map pixels, which is also the tile size.
+// Marker positions are stored relative to their grid; the map view works in
+// absolute pixels.
+const GridSize = 100
+
+// floorDiv rounds towards negative infinity. Go's / truncates towards zero, so
+// a point at x=-50 would land on grid 0 instead of grid -1 and the marker would
+// appear a whole grid away.
+func floorDiv(a, b int) int {
+	q := a / b
+	if a%b != 0 && (a < 0) != (b < 0) {
+		q--
+	}
+	return q
+}
+
+// markerPlacement splits an absolute position on a map into the grid it falls
+// on and the offset inside that grid. Markers are stored against a grid rather
+// than in absolute coordinates so that merging two maps carries them along with
+// the tiles instead of leaving them behind.
+func markerPlacement(x, y int) (Coord, Position) {
+	gc := Coord{X: floorDiv(x, GridSize), Y: floorDiv(y, GridSize)}
+	return gc, Position{X: x - gc.X*GridSize, Y: y - gc.Y*GridSize}
+}
+
+// addMarker places a marker from the map view rather than from a game client.
+func (m *Map) addMarker(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
+	s := m.getSession(req)
+	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
+		http.Error(rw, "not allowed", http.StatusForbidden)
+		return
+	}
+	mapid, err := strconv.Atoi(req.FormValue("map"))
+	if err != nil {
+		http.Error(rw, "map is not a number", http.StatusBadRequest)
+		return
+	}
+	x, err := strconv.Atoi(req.FormValue("x"))
+	if err != nil {
+		http.Error(rw, "x is not a number", http.StatusBadRequest)
+		return
+	}
+	y, err := strconv.Atoi(req.FormValue("y"))
+	if err != nil {
+		http.Error(rw, "y is not a number", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(req.FormValue("name"))
+	if name == "" {
+		http.Error(rw, "the marker needs a name", http.StatusBadRequest)
+		return
+	}
+	if len([]rune(name)) > maxMarkerNameLen {
+		http.Error(rw, "that name is too long", http.StatusBadRequest)
+		return
+	}
+	showName := req.FormValue("showName") == "true"
+
+	gc, local := markerPlacement(x, y)
+
+	created := FrontendMarker{}
+	err = m.db.Update(func(tx *bbolt.Tx) error {
+		grids := tx.Bucket([]byte("grids"))
+		if grids == nil {
+			return errNoGridThere
+		}
+		gridID := ""
+		grids.ForEach(func(k, v []byte) error {
+			if gridID != "" {
+				return nil
+			}
+			g := GridData{}
+			if json.Unmarshal(v, &g) != nil {
+				return nil
+			}
+			if g.Map == mapid && g.Coord == gc {
+				gridID = string(k)
+			}
+			return nil
+		})
+		if gridID == "" {
+			return errNoGridThere
+		}
+
+		mb, err := tx.CreateBucketIfNotExists([]byte("markers"))
+		if err != nil {
+			return err
+		}
+		grid, err := mb.CreateBucketIfNotExists([]byte("grid"))
+		if err != nil {
+			return err
+		}
+		idB, err := mb.CreateBucketIfNotExists([]byte("id"))
+		if err != nil {
+			return err
+		}
+		// Markers are keyed by where they sit, so two in the same spot would be
+		// one marker. Say so rather than silently replacing what is there.
+		key := []byte(fmt.Sprintf("%s_%d_%d", gridID, local.X, local.Y))
+		if grid.Get(key) != nil {
+			return errMarkerThere
+		}
+		id, err := idB.NextSequence()
+		if err != nil {
+			return err
+		}
+		marker := Marker{
+			Name:     name,
+			ID:       int(id),
+			GridID:   gridID,
+			Position: local,
+			Image:    WaypointImage,
+			ShowName: showName,
+		}
+		raw, err := json.Marshal(marker)
+		if err != nil {
+			return err
+		}
+		if err := grid.Put(key, raw); err != nil {
+			return err
+		}
+		if err := idB.Put([]byte(strconv.Itoa(marker.ID)), key); err != nil {
+			return err
+		}
+		created = FrontendMarker{
+			Name:     marker.Name,
+			ID:       marker.ID,
+			Map:      mapid,
+			Position: Position{X: x, Y: y},
+			Image:    marker.Image,
+			ShowName: marker.ShowName,
+		}
+		return nil
+	})
+	switch err {
+	case nil:
+	case errNoGridThere:
+		http.Error(rw, "there is no mapped ground there yet", http.StatusNotFound)
+		return
+	case errMarkerThere:
+		http.Error(rw, "there is already a marker on that spot", http.StatusConflict)
+		return
+	default:
+		log.Println("Error adding marker: ", err)
+		http.Error(rw, "could not save the marker", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("%q added marker %q on map %d at %d,%d", s.Username, name, mapid, x, y)
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(created)
+}
+
+var (
+	errNoGridThere = errors.New("no grid at that position")
+	errMarkerThere = errors.New("a marker already exists there")
+)

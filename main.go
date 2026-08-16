@@ -149,6 +149,7 @@ func main() {
 	http.HandleFunc("/map/api/admin/wipeTile", m.wipeTile)
 	http.HandleFunc("/map/api/admin/setCoords", m.setCoords)
 	http.HandleFunc("/map/api/admin/hideMarker", m.hideMarker)
+	http.HandleFunc("/map/api/admin/addMarker", m.addMarker)
 	http.HandleFunc("/map/updates", m.watchGridUpdates)
 	http.HandleFunc("/map/grids/", m.gridTile)
 	http.HandleFunc("/map/api/maps", m.getMaps)
@@ -183,6 +184,9 @@ type Marker struct {
 	Position Position `json:"position"`
 	Image    string   `json:"image"`
 	Hidden   bool     `json:"hidden"`
+	// Set on markers placed from the map view, where the point of the marker
+	// is usually the label rather than the icon.
+	ShowName bool `json:"showName"`
 }
 
 type FrontendMarker struct {
@@ -192,6 +196,7 @@ type FrontendMarker struct {
 	Position Position `json:"position"`
 	Image    string   `json:"image"`
 	Hidden   bool     `json:"hidden"`
+	ShowName bool     `json:"showName"`
 }
 
 type MapInfo struct {

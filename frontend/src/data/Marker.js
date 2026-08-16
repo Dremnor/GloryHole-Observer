@@ -1,7 +1,12 @@
 import {HnHMaxZoom, ImageIcon} from "../utils/LeafletCustomTypes";
 import * as L from "leaflet";
 
+// Markers an admin drops from the map view. A real file under public/, so the
+// icon panel lists it and it can be replaced there like any other.
+export const WaypointImage = "gfx/hnhmap/waypoint";
+
 function detectType(image, markerName) {
+    if (image === WaypointImage) return "waypoint";
     // Caves go by their marker name rather than their image: the client reports
     // them under assorted images, and the map has always drawn them with the
     // cave icon, so they belong in one category rather than scattered across
@@ -25,6 +30,8 @@ export class Marker {
         this.text = this.name;
         this.value = this.id;
         this.hidden = markerData.hidden;
+        // Set on admin-placed markers whose label is the point of them.
+        this.showName = markerData.showName === true;
         this.map = markerData.map;
         this.onClick = null;
         this.onContext = null;
@@ -51,7 +58,19 @@ export class Marker {
             let isCave = this.name.toLowerCase() === "cave";
             let hsz = 9;
 
-            if (isCustom && !isCave) {
+            if (this.type === "waypoint") {
+                // A pin rather than a blob: it points at a spot the way a map
+                // pin does, so it is anchored at its tip.
+                icon = new ImageIcon({
+                    iconUrl: `${WaypointImage}.png`,
+                    iconSize: [24, 30],
+                    iconAnchor: [12, 30],
+                    popupAnchor: [0, -32],
+                    // Clear of the pin's head, so the label does not sit on
+                    // top of the icon it belongs to.
+                    tooltipAnchor: [0, -34]
+                })
+            } else if (isCustom && !isCave) {
                 icon = new ImageIcon({
                     iconUrl: 'gfx/terobjs/mm/custom.png',
                     iconSize: [21, 23],
@@ -73,12 +92,18 @@ export class Marker {
                 col = "#FDB800";
             } else if (this.type === "thingwall") {
                 col = "#00cffd";
+            } else if (this.type === "waypoint") {
+                col = "#FFD24A";
             }
             this.marker.marker = this;
             this.marker.bindTooltip("<div style='color:" + col + ";'><b>" + this.name + "</b></div>", {
                 permanent: false,
                 direction: 'top',
-                sticky: true,
+                // Leaflet ignores an icon's tooltipAnchor whenever the tooltip
+                // is sticky, so a pin's label would sit on top of the pin. The
+                // other markers are small and centred on their point, where
+                // sticky costs nothing.
+                sticky: this.type !== "waypoint",
                 opacity: 0.9
             });
             this.marker.on('mouseout', function (ev) {
@@ -96,6 +121,33 @@ export class Marker {
             this.marker.addTo(mapview.markerLayer);
             this.marker.on("click", this.callClickCallback.bind(this));
             this.marker.on("contextmenu", this.callContextCallback.bind(this));
+        }
+    }
+
+    // A refresh brings the marker's own data back from the server. It was never
+    // implemented, so the update callback threw on every marker already on the
+    // map — harmless while markers were fetched exactly once at startup, fatal
+    // the moment anything asks for them again.
+    update(mapview, updated) {
+        const redraw = this.image !== updated.image ||
+            this.name !== updated.name ||
+            this.hidden !== updated.hidden ||
+            this.position.x !== updated.position.x ||
+            this.position.y !== updated.position.y;
+
+        this.name = updated.name;
+        this.text = updated.name;
+        this.image = updated.image;
+        this.type = detectType(this.image, this.name);
+        this.hidden = updated.hidden;
+        this.showName = updated.showName === true;
+        this.position = updated.position;
+        this.map = updated.map;
+
+        // Icon, label and position are all baked in when the marker is drawn,
+        // so anything that moves or renames it is redrawn rather than patched.
+        if (redraw && this.marker) {
+            this.remove(mapview);
         }
     }
 

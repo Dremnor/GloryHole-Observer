@@ -180,6 +180,23 @@ containers have no egress at all — check `docker run --rm alpine ping -c2 1.1.
 and `sysctl net.ipv4.ip_forward`, which is a firewall or forwarding problem
 rather than DNS.
 
+## Placing a marker from the map
+
+Right-click the map as an `admin` or `writer` and pick **Add a marker here**.
+Give it a name and say whether that name should stay on the map or only appear
+on hover. It shows as a gold pin with a gold label, and everyone with the
+`markers` role sees it — these are the map's own markers rather than anything a
+game client uploaded.
+
+The marker is stored against the grid it sits on, like every other marker, so
+merging two maps carries it along with the tiles instead of leaving it behind.
+Two consequences: ground nobody has mapped yet cannot hold one, and a spot that
+already has a marker is refused rather than quietly overwritten. Remove one the
+same way as any other marker — right-click it and hide it.
+
+Its icon is `gfx/hnhmap/waypoint`, a normal image like the rest, so **Manage
+icons** lists it and a different pin can be uploaded there.
+
 ## Marker icons
 
 Markers are drawn from images addressed by the path the client reports, such as

@@ -71,11 +71,12 @@ func (m *Map) getMarkers(rw http.ResponseWriter, req *http.Request) {
 			g := GridData{}
 			json.Unmarshal(graw, &g)
 			markers = append(markers, FrontendMarker{
-				Image:  m.Image,
-				Hidden: m.Hidden,
-				ID:     m.ID,
-				Name:   m.Name,
-				Map:    g.Map,
+				Image:    m.Image,
+				Hidden:   m.Hidden,
+				ID:       m.ID,
+				Name:     m.Name,
+				Map:      g.Map,
+				ShowName: m.ShowName,
 				Position: Position{
 					X: m.Position.X + g.Coord.X*100,
 					Y: m.Position.Y + g.Coord.Y*100,

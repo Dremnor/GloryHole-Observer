@@ -147,6 +147,9 @@
               <a @click.prevent="queryCoordSet(tile.data)">Rewrite tile coords for {{ tile.data.coords.x }},
                 {{ tile.data.coords.y }}</a>
             </li>
+            <li>
+              <a @click.prevent="queryAddMarker(tile.data)">Add a marker here</a>
+            </li>
           </template>
         </vue-context>
 
@@ -157,6 +160,21 @@
             </li>
           </template>
         </vue-context>
+
+        <modal name="addMarker" height="auto" :width="360">
+          <form class="wp-form" v-on:submit.prevent="submitMarker()">
+            <div class="wp-form-title">New marker</div>
+            <v-text-field v-model="newMarker.name" ref="newMarkerName" dense outlined autofocus
+                          label="Name" counter="80" maxlength="80" hide-details="auto"/>
+            <v-switch v-model="newMarker.showName" dense inset hide-details class="mt-2"
+                      label="Show the name on the map"/>
+            <div v-if="newMarker.error" class="wp-form-error">{{ newMarker.error }}</div>
+            <div class="wp-form-actions">
+              <v-btn small text @click="$modal.hide('addMarker')">Cancel</v-btn>
+              <v-btn small color="primary" type="submit" :disabled="!newMarker.name.trim()">Add</v-btn>
+            </div>
+          </form>
+        </modal>
 
         <modal name="coordSet">
           <form v-on:submit.prevent="setCoords()">
@@ -289,6 +307,7 @@ export default {
       mapid: 0,
       resizeObserver: null,
       invalidateTimer: null,
+      newMarker: {name: '', showName: true, x: 0, y: 0, error: ''},
       coordSetFrom: {x: 0, y: 0},
       coordSet: {
         x: 0,
@@ -570,7 +589,13 @@ export default {
         if (this.auths.includes('admin') || this.auths.includes('writer')) {
           let point = this.map.project(mev.latlng, this.map.getZoom());
           let coords = {x: Math.floor(point.x / TileSize), y: Math.floor(point.y / TileSize)};
-          this.$refs.menu.open(mev.originalEvent, {coords: coords});
+          // Markers are stored in max-zoom pixels, so take the exact point
+          // there rather than deriving it from the tile the click landed on.
+          let exact = this.map.project(mev.latlng, HnHMaxZoom);
+          this.$refs.menu.open(mev.originalEvent, {
+            coords: coords,
+            point: {x: Math.round(exact.x), y: Math.round(exact.y)}
+          });
         }
       }).bind(this));
 
@@ -645,11 +670,7 @@ export default {
         });
       }, 2000);
       // Request markers
-      this.$http.get(`${API_ENDPOINT}/v1/markers`).then(response => {
-        this.updateMarkers(response.body);
-      }, () => {
-        this.$emit("error")
-      });
+      this.refreshMarkers();
     },
     updateMarkers(markersData) {
       this.markers.update(markersData.map(it => {
@@ -684,6 +705,9 @@ export default {
           (marker, updated) => { // Update
             marker.update(this, updated);
           });
+      // Anything the update above took off the map is put back by the same
+      // rule that decides visibility everywhere else.
+      this.applyMarkerVisibility();
       // this.markersCache.length = 0;
       // this.markers.getElements().forEach(it => this.markersCache.push(it));
       /*this.markersCache.sort((a, b) => {
@@ -904,7 +928,9 @@ export default {
     markerTooltipState(marker) {
       if (marker.type === "thingwall") return this.showThingwallTooltips;
       if (marker.type === "quest") return this.showQuestTooltips;
-      return false;
+      // Placed from the map view with the label switched on: the name is the
+      // point of the marker, so it is not hidden behind a hover.
+      return marker.showName === true;
     },
     processConfig(config) {
       document.title = config.title;
@@ -917,6 +943,33 @@ export default {
     zoomOut() {
       this.trackingCharacterId = -1;
       this.map.setView([0, 0], HnHMinZoom);
+    },
+    queryAddMarker(data) {
+      this.newMarker = {name: '', showName: true, x: data.point.x, y: data.point.y, error: ''};
+      this.$modal.show('addMarker');
+    },
+    submitMarker() {
+      const wp = this.newMarker;
+      const name = wp.name.trim();
+      if (!name) {
+        return;
+      }
+      this.$http.post(`${API_ENDPOINT}/admin/addMarker`, null, {
+        params: {map: this.mapid, x: wp.x, y: wp.y, name: name, showName: wp.showName}
+      }).then(() => {
+        this.$modal.hide('addMarker');
+        this.refreshMarkers();
+      }, response => {
+        // The server refuses on ground it has no tiles for and on a spot that
+        // already holds a marker; both are worth saying rather than leaving the
+        // dialog looking like it worked.
+        wp.error = (response && response.bodyText) || 'The marker could not be saved.';
+      });
+    },
+    refreshMarkers() {
+      this.$http.get(`${API_ENDPOINT}/v1/markers`).then(response => {
+        this.updateMarkers(response.body);
+      }, () => this.$emit("error"));
     },
     wipeTile(data) {
       this.$http.post(`${API_ENDPOINT}/admin/wipeTile`, null, {params: {...data.coords, map: this.mapid}});
@@ -1113,6 +1166,30 @@ export default {
 
 .cat-summary {
   font-size: 13px;
+}
+
+.wp-form {
+  padding: 18px 20px 14px;
+}
+
+.wp-form-title {
+  font-size: 15px;
+  font-weight: 500;
+  margin-bottom: 14px;
+}
+
+.wp-form-error {
+  color: #c62828;
+  font-size: 12px;
+  line-height: 1.35;
+  padding-top: 8px;
+}
+
+.wp-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 14px;
 }
 
 /* Rows of the waypoint search: icon, name, and the type on the right. */
