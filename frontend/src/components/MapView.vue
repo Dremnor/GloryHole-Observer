@@ -266,6 +266,8 @@ export default {
       overlayMap: null,
       auths: [],
       mapid: 0,
+      resizeObserver: null,
+      invalidateTimer: null,
       coordSetFrom: {x: 0, y: 0},
       coordSet: {
         x: 0,
@@ -442,7 +444,11 @@ export default {
     }, () => this.$emit("error"));
   },
   beforeDestroy: function () {
-    clearInterval(this.intervalId)
+    clearInterval(this.intervalId);
+    clearTimeout(this.invalidateTimer);
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+    }
   },
   methods: {
     setupMap(characters, maps) {
@@ -522,6 +528,15 @@ export default {
 
       this.markerLayer = L.layerGroup();
       this.markerLayer.addTo(this.map);
+
+      // Leaflet lays its tiles out from the container size it measured, and
+      // never notices the container changing on its own. Opening or closing
+      // the panel resizes it, and the tiles kept the old geometry — leaving a
+      // black band down the side of the map until the page was reloaded.
+      if (window.ResizeObserver) {
+        this.resizeObserver = new ResizeObserver(() => this.scheduleInvalidate());
+        this.resizeObserver.observe(this.$refs.map);
+      }
 
       /*this.map.on('mousemove', (mev) => {
           coords = this.map.project(mev.latlng, this.map.getZoom());
@@ -789,6 +804,19 @@ export default {
         });
       }
     },
+    // Coalesced, because a resize observer fires on every frame of the
+    // drawer's animation.
+    scheduleInvalidate() {
+      if (this.invalidateTimer) {
+        return;
+      }
+      this.invalidateTimer = setTimeout(() => {
+        this.invalidateTimer = null;
+        if (this.map) {
+          this.map.invalidateSize({pan: false});
+        }
+      }, 50);
+    },
     // The autocomplete filters on the displayed name alone; waypointMatches
     // has already matched on name and type, so let everything through.
     alwaysMatch() {
@@ -899,8 +927,11 @@ export default {
   padding: 0px !important;
 }
 
+/* The area beside the panel, not the whole viewport: v-main already indents
+   the content by the drawer's width, so 100vw pushed the map that far off the
+   right edge. */
 .map {
-  width: 100vw;
+  width: 100%;
   height: 100vh;
 }
 
@@ -1058,14 +1089,6 @@ export default {
 .role-note code {
   font-size: 11px;
   padding: 0 2px;
-}
-
-.v-navigation-drawer__content {
-  padding: 0px !important;
-}
-
-.v-navigation-drawer {
-  width: auto !important;
 }
 
 .leaflet-tooltip {
