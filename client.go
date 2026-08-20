@@ -3,16 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,22 @@ import (
 
 var clientPath = regexp.MustCompile("client/([^/]+)/(.*)")
 
-var UserInfo struct{}
+// validGridID limits grid IDs to characters that are safe to embed in a file
+// path. Grid IDs arrive straight from the client and end up in the on-disk
+// tile name, so anything outside this set is rejected.
+var validGridID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+type ctxKey int
+
+const userCtxKey ctxKey = iota
+
+// userFrom returns the username the upload token resolved to, for logging.
+func userFrom(ctx context.Context) string {
+	if u, ok := ctx.Value(userCtxKey).(string); ok && u != "" {
+		return u
+	}
+	return "unknown"
+}
 
 const VERSION = "4"
 
@@ -67,7 +83,7 @@ func (m *Map) client(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	ctx := context.WithValue(req.Context(), UserInfo, user)
+	ctx := context.WithValue(req.Context(), userCtxKey, user)
 	req = req.WithContext(ctx)
 
 	switch matches[2] {
@@ -98,24 +114,48 @@ func (m *Map) client(rw http.ResponseWriter, req *http.Request) {
 
 func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User) {
 	defer req.Body.Close()
-	craws := map[string]struct {
+	type positionRaw struct {
 		Name   string
-		GridID string
+		GridID flexString
 		Coords struct {
-			X, Y int
+			X, Y flexInt
 		}
 		Type string
-	}{}
-	buf, err := ioutil.ReadAll(req.Body)
+	}
+	buf, err := io.ReadAll(req.Body)
 	if err != nil {
 		log.Println("Error reading position update json: ", err)
 		return
 	}
-	err = json.Unmarshal(buf, &craws)
+	// Decoded one character at a time: a single unreadable entry should cost
+	// that character, not everyone the client reported alongside it.
+	batch := map[string]json.RawMessage{}
+	repaired, err := decodeLoose(buf, &batch)
 	if err != nil {
 		log.Println("Error decoding position update json: ", err)
-		log.Println("Original json: ", string(buf))
+		log.Println("Original json: ", clip(buf))
 		return
+	}
+	if repaired && uploadLog.allow("positionUpdate-repair:"+userFrom(req.Context())) {
+		log.Printf("positionUpdate from %q: client sent invalid JSON; read it anyway — %s",
+			userFrom(req.Context()), clip(buf))
+	}
+	craws := make(map[string]positionRaw, len(batch))
+	rejected, firstBad, firstErr := 0, "", error(nil)
+	for id, raw := range batch {
+		c := positionRaw{}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			rejected++
+			if firstErr == nil {
+				firstErr, firstBad = err, clip(raw)
+			}
+			continue
+		}
+		craws[id] = c
+	}
+	if rejected > 0 && uploadLog.allow("positionUpdate:"+userFrom(req.Context())) {
+		log.Printf("positionUpdate from %q: %d of %d characters unreadable, first: %v in %s",
+			userFrom(req.Context()), rejected, len(batch), firstErr, firstBad)
 	}
 	groups := groupArr(u.Auths)
 	m.db.View(func(tx *bbolt.Tx) error {
@@ -128,7 +168,16 @@ func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User)
 		for id, craw := range craws {
 			grid := grids.Get([]byte(craw.GridID))
 			if grid == nil {
-				return nil
+				// A character standing on ground nobody has uploaded yet has
+				// nowhere to be drawn. Common right after a wipe, and the one
+				// case where "players do not show up" is expected.
+				if uploadLog.allow("positionUpdate-grid:" + userFrom(req.Context())) {
+					log.Printf("positionUpdate from %q: character %q is on grid %s, which this server does not have",
+						userFrom(req.Context()), craw.Name, craw.GridID)
+				}
+				// Unknown grid: skip this character but keep processing the
+				// rest of the batch.
+				continue
 			}
 			gd := GridData{}
 			json.Unmarshal(grid, &gd)
@@ -138,8 +187,8 @@ func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User)
 				ID:   idnum,
 				Map:  gd.Map,
 				Position: Position{
-					X: craw.Coords.X + (gd.Coord.X * 100),
-					Y: craw.Coords.Y + (gd.Coord.Y * 100),
+					X: int(craw.Coords.X) + (gd.Coord.X * 100),
+					Y: int(craw.Coords.Y) + (gd.Coord.Y * 100),
 				},
 				Type:    craw.Type,
 				updated: time.Now(),
@@ -177,26 +226,60 @@ func (m *Map) updatePositions(rw http.ResponseWriter, req *http.Request, u User)
 
 func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
-	markers := []struct {
+	// Type and Color are not used here, and leaving them out means a client
+	// that spells either of them differently — a colour as an object rather
+	// than a string, say — cannot stop the markers being read.
+	type markerRaw struct {
 		Name   string
-		GridID string
-		X, Y   int
+		GridID flexString
+		X, Y   flexInt
 		Image  string
-		Type   string
-		Color  string
-	}{}
-	buf, err := ioutil.ReadAll(req.Body)
+	}
+	buf, err := io.ReadAll(req.Body)
 	if err != nil {
 		log.Println("Error reading marker json: ", err)
 		return
 	}
-	err = json.Unmarshal(buf, &markers)
+	// One marker at a time, for the same reason as the position update: an
+	// unreadable entry used to discard the whole upload, which is how a marker
+	// type can be missing from the map while others from the same client are
+	// there.
+	raws := []json.RawMessage{}
+	repaired, err := decodeLoose(buf, &raws)
 	if err != nil {
 		log.Println("Error decoding marker json: ", err)
-		log.Println("Original json: ", string(buf))
+		log.Println("Original json: ", clip(buf))
 		return
 	}
+	if repaired && uploadLog.allow("markerUpdate-repair:"+userFrom(req.Context())) {
+		log.Printf("markerUpdate from %q: client sent invalid JSON; read it anyway — %s",
+			userFrom(req.Context()), clip(buf))
+	}
+	markers := make([]markerRaw, 0, len(raws))
+	rejected, firstBad, firstErr := 0, "", error(nil)
+	for _, raw := range raws {
+		mr := markerRaw{}
+		if err := json.Unmarshal(raw, &mr); err != nil {
+			rejected++
+			if firstErr == nil {
+				firstErr, firstBad = err, clip(raw)
+			}
+			continue
+		}
+		markers = append(markers, mr)
+	}
+	if rejected > 0 && uploadLog.allow("markerUpdate:"+userFrom(req.Context())) {
+		log.Printf("markerUpdate from %q: %d of %d markers unreadable, first: %v in %s",
+			userFrom(req.Context()), rejected, len(raws), firstErr, firstBad)
+	}
+	// A successful upload used to be silent, so "is my marker getting through?"
+	// had no answer short of reading the database. Counted here and reported
+	// below, only when something actually changed.
+	stored, changed := 0, 0
+	newImages := map[string]bool{}
 	err = m.db.Update(func(tx *bbolt.Tx) error {
+		stored, changed = 0, 0
+		clear(newImages)
 		mb, err := tx.CreateBucketIfNotExists([]byte("markers"))
 		if err != nil {
 			return err
@@ -211,12 +294,39 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 		}
 
 		for _, mraw := range markers {
-			key := []byte(fmt.Sprintf("%s_%d_%d", mraw.GridID, mraw.X, mraw.Y))
-			if grid.Get(key) != nil {
+			gridID := string(mraw.GridID)
+			if !validGridID.MatchString(gridID) {
+				log.Printf("markerUpdate from %q: skipping marker %q with invalid grid id %q",
+					userFrom(req.Context()), mraw.Name, gridID)
 				continue
 			}
 			if mraw.Image == "" {
 				mraw.Image = "gfx/terobjs/mm/custom"
+			}
+			key := []byte(fmt.Sprintf("%s_%d_%d", gridID, mraw.X, mraw.Y))
+			if existing := grid.Get(key); existing != nil {
+				// A marker used to be written once and never touched again, so a
+				// rename or a changed icon in game never reached the map. Update
+				// those, but keep the ID the frontend refers to and any Hidden
+				// flag an admin has set.
+				em := Marker{}
+				if err := json.Unmarshal(existing, &em); err != nil {
+					continue
+				}
+				if em.Name == mraw.Name && em.Image == mraw.Image {
+					continue
+				}
+				em.Name = mraw.Name
+				em.Image = mraw.Image
+				raw, err := json.Marshal(em)
+				if err != nil {
+					return err
+				}
+				if err := grid.Put(key, raw); err != nil {
+					return err
+				}
+				changed++
+				continue
 			}
 			id, err := idB.NextSequence()
 			if err != nil {
@@ -226,16 +336,18 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 			m := Marker{
 				Name:   mraw.Name,
 				ID:     int(id),
-				GridID: mraw.GridID,
+				GridID: gridID,
 				Position: Position{
-					X: mraw.X,
-					Y: mraw.Y,
+					X: int(mraw.X),
+					Y: int(mraw.Y),
 				},
 				Image: mraw.Image,
 			}
 			raw, _ := json.Marshal(m)
 			grid.Put(key, raw)
 			idB.Put(idKey, key)
+			stored++
+			newImages[mraw.Image] = true
 		}
 		return nil
 	})
@@ -243,6 +355,24 @@ func (m *Map) uploadMarkers(rw http.ResponseWriter, req *http.Request) {
 		log.Println("Error update db: ", err)
 		return
 	}
+	if stored > 0 || changed > 0 {
+		log.Printf("markerUpdate from %q: %d new, %d updated%s",
+			userFrom(req.Context()), stored, changed, imageList(newImages))
+	}
+}
+
+// imageList names the images of newly stored markers, so the log says which
+// kind of marker just arrived rather than only how many.
+func imageList(images map[string]bool) string {
+	if len(images) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(images))
+	for img := range images {
+		names = append(names, img)
+	}
+	sort.Strings(names)
+	return " (" + strings.Join(names, ", ") + ")"
 }
 
 func (m *Map) locate(rw http.ResponseWriter, req *http.Request) {
@@ -279,6 +409,91 @@ type GridRequest struct {
 	Coords       Coord    `json:"coords"`
 }
 
+type gridOffset struct{ X, Y int }
+
+// mapMatch records how an already known map lines up with the grid window a
+// client just reported: the offset its grids imply, how many grids in the
+// window agree on that offset, and whether any grid contradicted it.
+type mapMatch struct {
+	off      gridOffset
+	count    int
+	conflict bool
+}
+
+// errInconsistentGrids aborts a grid update whose own anchor map reports
+// contradictory offsets. Writing anything based on such a window would corrupt
+// the map layout, so the whole transaction is rolled back.
+var errInconsistentGrids = errors.New("grid window reports inconsistent offsets")
+
+// buildMatches maps each already-known map appearing in the client's grid
+// window to the offset those grids imply. lookup returns nil for unknown grids.
+func buildMatches(gridRows [][]string, lookup func(string) *GridData) map[int]*mapMatch {
+	matches := map[int]*mapMatch{}
+	for x, row := range gridRows {
+		for y, grid := range row {
+			gd := lookup(grid)
+			if gd == nil {
+				continue
+			}
+			off := gridOffset{X: gd.Coord.X - x, Y: gd.Coord.Y - y}
+			mm, ok := matches[gd.Map]
+			if !ok {
+				matches[gd.Map] = &mapMatch{off: off, count: 1}
+				continue
+			}
+			if mm.off != off {
+				// Two grids of the same map disagree about where the client is.
+				// The window cannot be trusted for this map.
+				mm.conflict = true
+				continue
+			}
+			mm.count++
+		}
+	}
+	return matches
+}
+
+type mergeDecision struct {
+	mapID   int
+	off     gridOffset
+	allowed bool
+	reason  string
+}
+
+// planMerges decides which of the other maps in the window may be folded into
+// the anchor map. A merge rewrites the coordinates of every grid in the merged
+// map and cannot be undone, so it requires minOverlap grids agreeing on a
+// single offset. Decisions are returned in map-ID order so the outcome does not
+// depend on Go's map iteration order.
+func planMerges(matches map[int]*mapMatch, anchorID, minOverlap int) []mergeDecision {
+	if minOverlap < 1 {
+		minOverlap = 1
+	}
+	ids := make([]int, 0, len(matches))
+	for id := range matches {
+		if id != anchorID {
+			ids = append(ids, id)
+		}
+	}
+	sort.Ints(ids)
+
+	decisions := make([]mergeDecision, 0, len(ids))
+	for _, id := range ids {
+		mm := matches[id]
+		d := mergeDecision{mapID: id, off: mm.off}
+		switch {
+		case mm.conflict:
+			d.reason = "its grids report inconsistent offsets"
+		case mm.count < minOverlap:
+			d.reason = fmt.Sprintf("only %d overlapping grid(s), need %d", mm.count, minOverlap)
+		default:
+			d.allowed = true
+		}
+		decisions = append(decisions, d)
+	}
+	return decisions
+}
+
 func (m *Map) gridUpdate(rw http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 	dec := json.NewDecoder(req.Body)
@@ -289,7 +504,23 @@ func (m *Map) gridUpdate(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, "Error decoding request", http.StatusBadRequest)
 		return
 	}
-	log.Println(grup)
+
+	user := userFrom(req.Context())
+
+	if len(grup.Grids) == 0 {
+		http.Error(rw, "empty grid set", http.StatusBadRequest)
+		return
+	}
+	for _, row := range grup.Grids {
+		for _, grid := range row {
+			if !validGridID.MatchString(grid) {
+				log.Printf("gridUpdate from %q: rejected, invalid grid id %q", user, grid)
+				http.Error(rw, "invalid grid id", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	log.Printf("gridUpdate from %q: %v", user, grup)
 
 	ops := []struct {
 		mapid int
@@ -319,19 +550,19 @@ func (m *Map) gridUpdate(rw http.ResponseWriter, req *http.Request) {
 			return err
 		}
 
-		maps := map[int]struct{ X, Y int }{}
-		for x, row := range grup.Grids {
-			for y, grid := range row {
-				gridRaw := grids.Get([]byte(grid))
-				if gridRaw != nil {
-					gd := GridData{}
-					json.Unmarshal(gridRaw, &gd)
-					maps[gd.Map] = struct{ X, Y int }{gd.Coord.X - x, gd.Coord.Y - y}
-				}
+		matches := buildMatches(grup.Grids, func(grid string) *GridData {
+			gridRaw := grids.Get([]byte(grid))
+			if gridRaw == nil {
+				return nil
 			}
-		}
+			gd := &GridData{}
+			if err := json.Unmarshal(gridRaw, gd); err != nil {
+				return nil
+			}
+			return gd
+		})
 
-		if len(maps) == 0 {
+		if len(matches) == 0 {
 			seq, err := mapB.NextSequence()
 			if err != nil {
 				return err
@@ -369,8 +600,8 @@ func (m *Map) gridUpdate(rw http.ResponseWriter, req *http.Request) {
 		}
 
 		mapid := -1
-		offset := struct{ X, Y int }{}
-		for id, off := range maps {
+		var anchor *mapMatch
+		for id, mm := range matches {
 			mi := MapInfo{}
 			mraw := mapB.Get([]byte(strconv.Itoa(id)))
 			if mraw != nil {
@@ -378,13 +609,32 @@ func (m *Map) gridUpdate(rw http.ResponseWriter, req *http.Request) {
 			}
 			if mi.Priority {
 				mapid = id
-				offset = off
+				anchor = mm
 				break
 			}
-			if id < mapid || mapid == -1 {
+			if mapid == -1 || id < mapid {
 				mapid = id
-				offset = off
+				anchor = mm
 			}
+		}
+
+		// If the map the client is standing on cannot agree with itself about
+		// where the client is, every coordinate derived from this window would
+		// be wrong. Roll back rather than write a corrupted layout.
+		if anchor.conflict {
+			log.Printf("gridUpdate from %q: rejected, map %d reports inconsistent offsets", user, mapid)
+			return errInconsistentGrids
+		}
+		offset := anchor.off
+
+		mergeable := map[int]gridOffset{}
+		for _, d := range planMerges(matches, mapid, *mergeMinOverlap) {
+			if !d.allowed {
+				log.Printf("gridUpdate from %q: refusing to merge map %d into %d: %s",
+					user, d.mapID, mapid, d.reason)
+				continue
+			}
+			mergeable[d.mapID] = d.off
 		}
 
 		log.Println("Client in mapid ", mapid)
@@ -412,20 +662,24 @@ func (m *Map) gridUpdate(rw http.ResponseWriter, req *http.Request) {
 				greq.GridRequests = append(greq.GridRequests, grid)
 			}
 		}
-		if curRaw := grids.Get([]byte(grup.Grids[1][1])); curRaw != nil {
-			cur := GridData{}
-			json.Unmarshal(curRaw, &cur)
-			greq.Map = cur.Map
-			greq.Coords = cur.Coord
+		// The client reports a window centred on its own position; the centre
+		// grid is what it wants coordinates for. Short windows are tolerated.
+		if len(grup.Grids) > 1 && len(grup.Grids[1]) > 1 {
+			if curRaw := grids.Get([]byte(grup.Grids[1][1])); curRaw != nil {
+				cur := GridData{}
+				json.Unmarshal(curRaw, &cur)
+				greq.Map = cur.Map
+				greq.Coords = cur.Coord
+			}
 		}
-		if len(maps) > 1 {
+		if len(mergeable) > 0 {
 			grids.ForEach(func(k, v []byte) error {
 				gd := GridData{}
 				json.Unmarshal(v, &gd)
 				if gd.Map == mapid {
 					return nil
 				}
-				if merge, ok := maps[gd.Map]; ok {
+				if merge, ok := mergeable[gd.Map]; ok {
 					var td *TileData
 					mapb, err := tiles.CreateBucketIfNotExists([]byte(strconv.Itoa(gd.Map)))
 					if err != nil {
@@ -462,17 +716,18 @@ func (m *Map) gridUpdate(rw http.ResponseWriter, req *http.Request) {
 				return nil
 			})
 		}
-		for mergeid, merge := range maps {
-			if mapid == mergeid {
-				continue
-			}
+		for mergeid, merge := range mergeable {
 			mapB.Delete([]byte(strconv.Itoa(mergeid)))
-			log.Println("Reporting merge", mergeid, mapid)
+			log.Printf("Merging map %d into %d (requested by %q)", mergeid, mapid, user)
 			m.reportMerge(mergeid, mapid, Coord{X: offset.X - merge.X, Y: offset.Y - merge.Y})
 		}
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errInconsistentGrids) {
+			http.Error(rw, "inconsistent grid data", http.StatusConflict)
+			return
+		}
 		log.Println(err)
 		return
 	}
@@ -533,6 +788,13 @@ func (m *Map) gridUpload(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	id := req.FormValue("id")
+	// The grid ID becomes part of the tile's path on disk. gridUpdate already
+	// rejects unsafe IDs, but this path is reachable on its own so it revalidates.
+	if !validGridID.MatchString(id) {
+		log.Printf("gridUpload from %q: rejected, invalid grid id %q", userFrom(req.Context()), id)
+		http.Error(rw, "invalid grid id", http.StatusBadRequest)
+		return
+	}
 
 	extraData := req.FormValue("extraData")
 	if extraData != "" {
@@ -610,7 +872,7 @@ func (m *Map) gridUpload(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log.Println("map tile for ", id)
+	log.Printf("gridUpload from %q: tile for grid %s", userFrom(req.Context()), id)
 
 	updateTile := false
 	cur := GridData{}
@@ -648,9 +910,15 @@ func (m *Map) gridUpload(rw http.ResponseWriter, req *http.Request) {
 	})
 
 	if updateTile {
-		os.MkdirAll(fmt.Sprintf("%s/grids", m.gridStorage), 0600)
+		// 0755, not 0600: without the execute bit nothing can descend into the
+		// directory to read the tiles back out.
+		if err := os.MkdirAll(fmt.Sprintf("%s/grids", m.gridStorage), 0755); err != nil {
+			log.Println("gridUpload: mkdir:", err)
+			return
+		}
 		f, err := os.Create(fmt.Sprintf("%s/grids/%s.png", m.gridStorage, cur.ID))
 		if err != nil {
+			log.Println("gridUpload: create:", err)
 			return
 		}
 		_, err = io.Copy(f, file)
@@ -696,14 +964,25 @@ func (m *Map) updateZoomLevel(mapid int, c Coord, z int) {
 			draw.BiLinear.Scale(img, image.Rect(50*x, 50*y, 50*x+50, 50*y+50), subimg, subimg.Bounds(), draw.Src, nil)
 		}
 	}
-	os.MkdirAll(fmt.Sprintf("%s/%d/%d", m.gridStorage, mapid, z), 0600)
-	f, err := os.Create(fmt.Sprintf("%s/%d/%d/%s.png", m.gridStorage, mapid, z, c.Name()))
-	m.SaveTile(mapid, c, z, fmt.Sprintf("%d/%d/%s.png", mapid, z, c.Name()), time.Now().UnixNano())
-	if err != nil {
+	if err := os.MkdirAll(fmt.Sprintf("%s/%d/%d", m.gridStorage, mapid, z), 0755); err != nil {
+		log.Println("updateZoomLevel: mkdir:", err)
 		return
 	}
-	defer func() {
+	name := fmt.Sprintf("%d/%d/%s.png", mapid, z, c.Name())
+	f, err := os.Create(filepath.Join(m.gridStorage, name))
+	if err != nil {
+		log.Println("updateZoomLevel: create:", err)
+		return
+	}
+	if err := png.Encode(f, img); err != nil {
 		f.Close()
-	}()
-	png.Encode(f, img)
+		log.Println("updateZoomLevel: encode:", err)
+		return
+	}
+	if err := f.Close(); err != nil {
+		log.Println("updateZoomLevel: close:", err)
+		return
+	}
+	// Only announce the tile once it is actually on disk.
+	m.SaveTile(mapid, c, z, name, time.Now().UnixNano())
 }

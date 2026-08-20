@@ -51,6 +51,13 @@
             </table>
             <div class="card">
                 <div class="card-content">
+                    <h5>Marker icons</h5>
+                    <p>Upload icons for markers the frontend has no image for, or replace existing ones</p>
+                    <a href="/admin/icons" class="waves-effect waves-light btn">Manage icons</a>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-content">
                     <h5>Default maps to hidden</h5>
                     <p>This makes new map layers hidden by default</p>
                     <form action="/admin/setDefaultHide" method="POST">
@@ -108,7 +115,9 @@
                         </div>
                         <div class="modal-footer">
                         <a href="#!" class="modal-close waves-effect waves-light green btn">Cancel</a>
-                        <a href="/admin/wipe" class="waves-effect waves-light red btn">WIPE</a>
+                        <form action="/admin/wipe" method="POST" style="display:inline">
+                            <button class="waves-effect waves-light red btn" type="submit">WIPE</button>
+                        </form>
                         </div>
                     </div>
                 </div>
@@ -116,7 +125,9 @@
             <div class="card">
                 <div class="card-content">
                     <h5>Rebuild zooms</h5>
-                    <a href="/admin/rebuildZooms" class="waves-effect waves-light red btn">Rebuild Zooms</a>
+                    <form action="/admin/rebuildZooms" method="POST">
+                        <button class="waves-effect waves-light red btn" type="submit">Rebuild Zooms</button>
+                    </form>
                 </div>
             </div>
             <div class="card">
@@ -124,6 +135,8 @@
                     <h5>Export</h5>
                     <p>Export grids and markers</p>
                     <a href="/admin/export" class="waves-effect waves-light blue btn">Download export</a>
+                    <p>Full backup of the database and the base zoom tiles</p>
+                    <a href="/admin/backup" class="waves-effect waves-light blue btn">Download backup</a>
                 </div>
             </div>
             <div class="card">

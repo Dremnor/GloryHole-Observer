@@ -3,7 +3,6 @@ package webapp
 import (
 	"html/template"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 )
@@ -37,7 +36,7 @@ func (w *WebApp) LoadTemplates(path string) (*WebApp, error) {
 		if err != nil {
 			return err
 		}
-		raw, err := ioutil.ReadFile(file)
+		raw, err := os.ReadFile(file)
 		if err != nil {
 			return err
 		}

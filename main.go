@@ -28,6 +28,8 @@ type Map struct {
 
 	gridUpdates  topic
 	mergeUpdates mergeTopic
+
+	loginLimit *loginLimiter
 }
 
 type Session struct {
@@ -49,6 +51,18 @@ var (
 		}
 		return 8080
 	}(), "Port to listen on")
+	// Merging two maps rewrites the coordinates of every grid in the merged map
+	// and cannot be undone, so a single stray grid should not trigger one. A
+	// client genuinely crossing between two mapped areas reports several
+	// overlapping grids within a request or two.
+	mergeMinOverlap = flag.Int("merge-min-overlap", 2,
+		"how many overlapping grids must agree before two maps are merged automatically (1 restores the old behaviour)")
+	trustProxyHeaders = flag.Bool("trust-proxy-headers", false,
+		"read the client address from X-Forwarded-For; only enable behind a reverse proxy whose port is not reachable directly")
+	loginMaxFailures = flag.Int("login-max-failures", 10,
+		"failed logins from one address before it is locked out (0 disables the limit)")
+	loginWindow = flag.Duration("login-window", 15*time.Minute,
+		"how long a login lockout lasts, extended by each further failure")
 )
 
 func faviconHandler(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +83,8 @@ func main() {
 		characters: map[string]Character{},
 
 		WebApp: webapp.Must(webapp.New().LoadTemplates("./templates/")),
+
+		loginLimit: newLoginLimiter(*loginMaxFailures, *loginWindow),
 	}
 
 	err = db.Update(func(tx *bbolt.Tx) error {
@@ -93,6 +109,7 @@ func main() {
 	}
 
 	go m.cleanChars()
+	go m.loginLimit.cleanup()
 
 	//http.HandleFunc("/favicon.ico", faviconHandler)
 	http.Handle("/favicon.ico", http.FileServer(http.Dir("public")))
@@ -115,9 +132,15 @@ func main() {
 	http.HandleFunc("/admin/setTitle", m.setTitle)
 	http.HandleFunc("/admin/rebuildZooms", m.rebuildZooms)
 	http.HandleFunc("/admin/export", m.export)
+	http.HandleFunc("/admin/backup", m.backup)
 	http.HandleFunc("/admin/merge", m.merge)
 	http.HandleFunc("/admin/map", m.adminMap)
 	http.HandleFunc("/admin/mapic", m.adminICMap)
+	http.HandleFunc("/admin/icons", m.adminIcons)
+	http.HandleFunc("/admin/icons/upload", m.uploadIcon)
+	http.HandleFunc("/admin/icons/delete", m.deleteIcon)
+	http.HandleFunc("/admin/icons/download", m.downloadIcon)
+	http.HandleFunc("/admin/icons/export", m.exportIcons)
 
 	// Map frontend endpoints
 	http.HandleFunc("/map/api/v1/characters", m.getChars)
@@ -126,10 +149,16 @@ func main() {
 	http.HandleFunc("/map/api/admin/wipeTile", m.wipeTile)
 	http.HandleFunc("/map/api/admin/setCoords", m.setCoords)
 	http.HandleFunc("/map/api/admin/hideMarker", m.hideMarker)
+	http.HandleFunc("/map/api/admin/addMarker", m.addMarker)
+	http.HandleFunc("/map/api/admin/deleteMarker", m.deleteMarker)
 	http.HandleFunc("/map/updates", m.watchGridUpdates)
 	http.HandleFunc("/map/grids/", m.gridTile)
 	http.HandleFunc("/map/api/maps", m.getMaps)
 	//http.Handle("/map/grids/", http.StripPrefix("/map/grids", http.FileServer(http.Dir(m.gridStorage))))
+
+	// Registered ahead of the static handler below: ServeMux prefers the longer
+	// pattern, so marker artwork goes through the icon override first.
+	http.HandleFunc("/map/gfx/", m.gfxAsset)
 
 	http.Handle("/map/", http.StripPrefix("/map", http.FileServer(http.Dir("frontend"))))
 
@@ -156,6 +185,9 @@ type Marker struct {
 	Position Position `json:"position"`
 	Image    string   `json:"image"`
 	Hidden   bool     `json:"hidden"`
+	// Set on markers placed from the map view, where the point of the marker
+	// is usually the label rather than the icon.
+	ShowName bool `json:"showName"`
 }
 
 type FrontendMarker struct {
@@ -165,6 +197,7 @@ type FrontendMarker struct {
 	Position Position `json:"position"`
 	Image    string   `json:"image"`
 	Hidden   bool     `json:"hidden"`
+	ShowName bool     `json:"showName"`
 }
 
 type MapInfo struct {
@@ -239,6 +272,25 @@ type User struct {
 	Pass   []byte
 	Auths  Auths
 	Tokens []string
+}
+
+// requirePOST rejects a state-changing request that did not arrive as a POST.
+// Together with the SameSite=Lax session cookie this is what stops cross-site
+// requests: Lax withholds the cookie from cross-site POSTs, while requiring
+// POST stops a plain link — which Lax still sends the cookie with — from
+// triggering a destructive action.
+func requirePOST(rw http.ResponseWriter, req *http.Request) bool {
+	if req.Method != http.MethodPost {
+		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
+}
+
+// requestIsHTTPS reports whether the client reached us over TLS, either
+// directly or through a terminating reverse proxy.
+func requestIsHTTPS(req *http.Request) bool {
+	return req.TLS != nil || req.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 func (m *Map) getSession(req *http.Request) *Session {

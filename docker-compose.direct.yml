@@ -1,0 +1,31 @@
+# Run without the Caddy proxy, publishing the map server on a port directly.
+# Use this when there is no domain pointed at the host yet:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.direct.yml up -d --build
+#
+# There is no TLS this way, so logins and session cookies cross the network in
+# clear text. Fine while trying things out; move to the Caddy setup in
+# docker-compose.yml once a domain points at the host.
+
+services:
+  map:
+    command:
+      - -grids=/map
+      - -merge-min-overlap=2
+      # -trust-proxy-headers is deliberately absent: with no proxy in front,
+      # anyone reaching this port could forge X-Forwarded-For and hand
+      # themselves a fresh allowance every time the login limiter refused them.
+    ports:
+      # Bound to localhost so the admin/admin window is not exposed while you
+      # create the first user. Reach it through an SSH tunnel:
+      #   ssh -L 8080:127.0.0.1:8080 root@your-server
+      # then open http://localhost:8080 in your own browser.
+      #
+      # Once a real admin user exists, change this to "8080:8080" and re-run
+      # the command above to publish it.
+      - "127.0.0.1:8080:8080"
+
+  # Not started by this override; the map server is published directly instead.
+  proxy:
+    profiles:
+      - caddy

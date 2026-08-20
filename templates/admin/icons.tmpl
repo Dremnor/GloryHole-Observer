@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+		<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+		<style>
+			.icon-cell { width: 48px; }
+			.icon-cell img { width: 32px; height: 32px; image-rendering: pixelated; }
+			.icon-key { font-family: monospace; word-break: break-all; }
+			.icon-row-missing { background: #fff3e0; }
+			.icon-form { display: flex; align-items: center; gap: 8px; margin: 0; }
+			.icon-form input[type=file] { max-width: 220px; }
+			table.icons td { padding: 8px; vertical-align: middle; }
+			.marker-note { font-size: 11px; line-height: 1.3; max-width: 190px; }
+		</style>
+		<title>{{.Page.Title}} - Marker icons</title>
+	</head>
+	<body>
+		<div class="container">
+			<a href="/admin" class="waves-effect waves-light btn">&larr; Admin portal</a>
+			<h5>Marker icons</h5>
+			<p>Every image a marker refers to. An icon uploaded here is stored with the
+			map data, so it survives a rebuild and takes precedence over the image
+			shipped with the frontend.</p>
+
+			<p>To edit an existing icon, download it, change it, and upload it back
+			against the same key.</p>
+			<a href="/admin/icons/export" class="waves-effect waves-light blue btn">
+				<i class="material-icons left">archive</i>Download all icons (.zip)
+			</a>
+
+			{{if .Error}}<div class="card-panel red lighten-4">{{.Error}}</div>{{end}}
+
+			{{if .Missing}}
+			<div class="card-panel orange lighten-4">
+				<b>{{.Missing}}</b> image{{if ne .Missing 1}}s have{{else}} has{{end}} no icon.
+				Those markers show a placeholder on the map until one is uploaded.
+			</div>
+			{{end}}
+
+			{{if .Unplaced}}
+			<div class="card-panel orange lighten-4">
+				<b>{{.Unplaced}}</b> marker{{if ne .Unplaced 1}}s are{{else}} is{{end}} stored against a
+				grid this server has no record of. A marker&#39;s position is relative to its
+				grid, so there is nowhere to draw {{if ne .Unplaced 1}}them{{else}}it{{end}} —
+				{{if ne .Unplaced 1}}they are{{else}}it is{{end}} counted below but not on the map.
+				Rescanning that part of the world in game puts the grid back and the marker
+				reappears on its own.
+			</div>
+			{{end}}
+
+			<table class="icons striped">
+				<thead>
+					<tr>
+						<th></th>
+						<th>Image key</th>
+						<th>Source</th>
+						<th>Markers</th>
+						<th>Current</th>
+						<th>Replace</th>
+					</tr>
+				</thead>
+				<tbody>
+				{{range .Icons}}
+					<tr{{if .Missing}} class="icon-row-missing"{{end}}>
+						<td class="icon-cell">
+							{{if .Missing}}
+								<i class="material-icons grey-text">help_outline</i>
+							{{else}}
+								<img src="/map/{{.Key}}.png" alt="">
+							{{end}}
+						</td>
+						<td class="icon-key">{{.Key}}</td>
+						<td>
+							{{if .Missing}}<span class="orange-text text-darken-3">missing</span>
+							{{else if .Custom}}<span class="green-text text-darken-2">uploaded</span>
+							{{else}}<span class="grey-text">built in</span>{{end}}
+						</td>
+						<td>
+							{{.Markers}}
+							{{with .Note}}<div class="marker-note grey-text text-darken-1">{{.}}</div>{{end}}
+						</td>
+						<td>
+							{{if .Missing}}
+								<span class="grey-text">&mdash;</span>
+							{{else}}
+								<a class="btn-small waves-effect waves-light grey darken-1"
+								   href="/admin/icons/download?key={{.Key}}">
+									<i class="material-icons">file_download</i>
+								</a>
+							{{end}}
+						</td>
+						<td>
+							<form class="icon-form" action="/admin/icons/upload" method="POST" enctype="multipart/form-data">
+								<input type="hidden" name="key" value="{{.Key}}">
+								<input type="file" name="file" accept="image/png" required>
+								<button class="btn-small waves-effect waves-light" type="submit">Upload</button>
+							</form>
+							{{if .Custom}}
+							<form class="icon-form" action="/admin/icons/delete" method="POST" style="margin-top:6px">
+								<input type="hidden" name="key" value="{{.Key}}">
+								<button class="btn-small waves-effect waves-light red lighten-1" type="submit">Remove upload</button>
+							</form>
+							{{end}}
+						</td>
+					</tr>
+				{{else}}
+					<tr><td colspan="6">No markers have been uploaded yet, so there is nothing to show.</td></tr>
+				{{end}}
+				</tbody>
+			</table>
+
+			<div class="card">
+				<div class="card-content">
+					<h6>Add an icon for a key not listed</h6>
+					<p>Keys appear above once a marker using them reaches the server. To add
+					one ahead of time, enter it exactly as the client reports it, without the
+					<code>.png</code> — for example <code>gfx/terobjs/mm/thingwall</code>.</p>
+					<form action="/admin/icons/upload" method="POST" enctype="multipart/form-data">
+						<div class="input-field">
+							<input id="key" type="text" name="key" pattern="[A-Za-z0-9_/-]+" required>
+							<label for="key">Image key</label>
+						</div>
+						<input type="file" name="file" accept="image/png" required>
+						<button class="btn waves-effect waves-light" type="submit" style="margin-top:12px">Upload</button>
+					</form>
+				</div>
+			</div>
+
+			<p class="grey-text">PNG only, up to 1&nbsp;MiB and 512&nbsp;px per side. Uploads are
+			re-encoded on the server. Markers are drawn at 18&nbsp;px, so anything much
+			larger is only useful for high-density displays.</p>
+		</div>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+		<script>M.AutoInit();</script>
+	</body>
+</html>

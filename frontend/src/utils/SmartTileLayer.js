@@ -1,4 +1,4 @@
-import L, {Bounds, LatLng, Point, Util, Browser} from "leaflet"
+import L, {Util, Browser} from "leaflet"
 
 export const SmartTileLayer = L.TileLayer.extend({
     cache: {},

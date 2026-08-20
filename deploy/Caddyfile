@@ -1,0 +1,27 @@
+# Replace with your domain. Caddy obtains and renews the certificate itself,
+# so there is nothing else to configure for TLS.
+map.example.com {
+	reverse_proxy map:8080 {
+		# The live tile feed at /map/updates is a Server-Sent Events stream.
+		# Buffering it would hold updates back until the buffer filled, so
+		# responses are flushed straight through.
+		flush_interval -1
+	}
+
+	# Tile and merge uploads are large; the defaults would reject them.
+	request_body {
+		max_size 512MB
+	}
+}
+
+# The second service planned for this host goes here as its own block, e.g.
+#
+# food.example.com {
+# 	reverse_proxy food:3000
+# }
+#
+# Caddy routes by hostname, so both share ports 80 and 443 without conflict.
+
+# Caddy sets X-Forwarded-Proto and X-Forwarded-For on its own, which is what
+# the map server reads to mark the session cookie Secure and to rate-limit
+# logins by real client address.

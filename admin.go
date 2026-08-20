@@ -108,6 +108,13 @@ func (m *Map) adminUser(rw http.ResponseWriter, req *http.Request) {
 		if username == s.Username {
 			s.Auths = auths
 		}
+		// A character's visibility group comes from whoever uploaded it, and a
+		// character with no group is shown to every map user. An upload account
+		// without a group role therefore quietly bypasses the group system.
+		if Auths(auths).Has(AUTH_UPLOAD) && len(groupArr(auths)) == 0 {
+			log.Printf("admin: user %q can upload but has no group role (g1-g5); "+
+				"characters it uploads will be visible to every map user", username)
+		}
 		if tempAdmin {
 			m.deleteSession(s)
 		}
@@ -143,12 +150,36 @@ func (m *Map) adminUser(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) wipe(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
 		http.Redirect(rw, req, "/", 302)
 		return
 	}
+	// Collect the map IDs before dropping the buckets, so the tile directories
+	// they own can be removed afterwards. Only these directories and "grids"
+	// are touched — grids.db lives in the same folder and must survive.
+	mapIDs := map[int]struct{}{}
 	err := m.db.Update(func(tx *bbolt.Tx) error {
+		if b := tx.Bucket([]byte("maps")); b != nil {
+			b.ForEach(func(k, v []byte) error {
+				if id, err := strconv.Atoi(string(k)); err == nil {
+					mapIDs[id] = struct{}{}
+				}
+				return nil
+			})
+		}
+		if b := tx.Bucket([]byte("grids")); b != nil {
+			b.ForEach(func(k, v []byte) error {
+				gd := GridData{}
+				if json.Unmarshal(v, &gd) == nil {
+					mapIDs[gd.Map] = struct{}{}
+				}
+				return nil
+			})
+		}
 		if tx.Bucket([]byte("grids")) != nil {
 			err := tx.DeleteBucket([]byte("grids"))
 			if err != nil {
@@ -177,10 +208,19 @@ func (m *Map) wipe(rw http.ResponseWriter, req *http.Request) {
 	})
 	if err != nil {
 		log.Println(err)
+		http.Redirect(rw, req, "/admin/", 302)
+		return
 	}
-	/*for z := 1; z <= 6; z++ {
-		os.RemoveAll(fmt.Sprintf("%s/%d", m.gridStorage, z))
-	}*/
+
+	// Drop the tile images too, otherwise a wipe leaks the whole map onto disk.
+	if err := os.RemoveAll(filepath.Join(m.gridStorage, "grids")); err != nil {
+		log.Println("wipe: removing grids:", err)
+	}
+	for id := range mapIDs {
+		if err := os.RemoveAll(filepath.Join(m.gridStorage, strconv.Itoa(id))); err != nil {
+			log.Printf("wipe: removing map %d: %v", id, err)
+		}
+	}
 	http.Redirect(rw, req, "/admin/", 302)
 }
 
@@ -242,6 +282,9 @@ type zoomproc struct {
 }
 
 func (m *Map) rebuildZooms(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
 		http.Redirect(rw, req, "/", 302)
@@ -298,6 +341,9 @@ func (m *Map) rebuildZooms(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) deleteUser(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
 		http.Redirect(rw, req, "/", 302)
@@ -341,6 +387,9 @@ func (m *Map) deleteUser(rw http.ResponseWriter, req *http.Request) {
 var errFound = errors.New("found tile")
 
 func (m *Map) wipeTile(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
 		http.Redirect(rw, req, "/", 302)
@@ -402,6 +451,9 @@ func (m *Map) wipeTile(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) setCoords(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
 		http.Redirect(rw, req, "/", 302)
@@ -689,6 +741,9 @@ func (m *Map) export(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) hideMarker(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
 		http.Redirect(rw, req, "/", 302)
@@ -730,6 +785,12 @@ func (m *Map) hideMarker(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) merge(rw http.ResponseWriter, req *http.Request) {
+	s := m.getSession(req)
+	if s == nil || !s.Auths.Has(AUTH_ADMIN) {
+		http.Redirect(rw, req, "/", 302)
+		return
+	}
+
 	err := req.ParseMultipartForm(1024 * 1024 * 500)
 	if err != nil {
 		log.Println(err)
@@ -1116,3 +1177,228 @@ func (m *Map) adminMap(rw http.ResponseWriter, req *http.Request) {
 		MapInfo: mi,
 	})
 }
+
+// WaypointImage is the icon admin-placed markers use. It is a real file under
+// frontend/public like every other marker image, so the icon panel lists it and
+// an admin can replace it there without touching the code.
+const WaypointImage = "gfx/hnhmap/waypoint"
+
+const maxMarkerNameLen = 80
+
+// GridSize is the side of one grid in map pixels, which is also the tile size.
+// Marker positions are stored relative to their grid; the map view works in
+// absolute pixels.
+const GridSize = 100
+
+// floorDiv rounds towards negative infinity. Go's / truncates towards zero, so
+// a point at x=-50 would land on grid 0 instead of grid -1 and the marker would
+// appear a whole grid away.
+func floorDiv(a, b int) int {
+	q := a / b
+	if a%b != 0 && (a < 0) != (b < 0) {
+		q--
+	}
+	return q
+}
+
+// markerPlacement splits an absolute position on a map into the grid it falls
+// on and the offset inside that grid. Markers are stored against a grid rather
+// than in absolute coordinates so that merging two maps carries them along with
+// the tiles instead of leaving them behind.
+func markerPlacement(x, y int) (Coord, Position) {
+	gc := Coord{X: floorDiv(x, GridSize), Y: floorDiv(y, GridSize)}
+	return gc, Position{X: x - gc.X*GridSize, Y: y - gc.Y*GridSize}
+}
+
+// addMarker places a marker from the map view rather than from a game client.
+func (m *Map) addMarker(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
+	s := m.getSession(req)
+	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
+		http.Error(rw, "not allowed", http.StatusForbidden)
+		return
+	}
+	mapid, err := strconv.Atoi(req.FormValue("map"))
+	if err != nil {
+		http.Error(rw, "map is not a number", http.StatusBadRequest)
+		return
+	}
+	x, err := strconv.Atoi(req.FormValue("x"))
+	if err != nil {
+		http.Error(rw, "x is not a number", http.StatusBadRequest)
+		return
+	}
+	y, err := strconv.Atoi(req.FormValue("y"))
+	if err != nil {
+		http.Error(rw, "y is not a number", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(req.FormValue("name"))
+	if name == "" {
+		http.Error(rw, "the marker needs a name", http.StatusBadRequest)
+		return
+	}
+	if len([]rune(name)) > maxMarkerNameLen {
+		http.Error(rw, "that name is too long", http.StatusBadRequest)
+		return
+	}
+	showName := req.FormValue("showName") == "true"
+
+	gc, local := markerPlacement(x, y)
+
+	created := FrontendMarker{}
+	err = m.db.Update(func(tx *bbolt.Tx) error {
+		grids := tx.Bucket([]byte("grids"))
+		if grids == nil {
+			return errNoGridThere
+		}
+		gridID := ""
+		grids.ForEach(func(k, v []byte) error {
+			if gridID != "" {
+				return nil
+			}
+			g := GridData{}
+			if json.Unmarshal(v, &g) != nil {
+				return nil
+			}
+			if g.Map == mapid && g.Coord == gc {
+				gridID = string(k)
+			}
+			return nil
+		})
+		if gridID == "" {
+			return errNoGridThere
+		}
+
+		mb, err := tx.CreateBucketIfNotExists([]byte("markers"))
+		if err != nil {
+			return err
+		}
+		grid, err := mb.CreateBucketIfNotExists([]byte("grid"))
+		if err != nil {
+			return err
+		}
+		idB, err := mb.CreateBucketIfNotExists([]byte("id"))
+		if err != nil {
+			return err
+		}
+		// Markers are keyed by where they sit, so two in the same spot would be
+		// one marker. Say so rather than silently replacing what is there.
+		key := []byte(fmt.Sprintf("%s_%d_%d", gridID, local.X, local.Y))
+		if grid.Get(key) != nil {
+			return errMarkerThere
+		}
+		id, err := idB.NextSequence()
+		if err != nil {
+			return err
+		}
+		marker := Marker{
+			Name:     name,
+			ID:       int(id),
+			GridID:   gridID,
+			Position: local,
+			Image:    WaypointImage,
+			ShowName: showName,
+		}
+		raw, err := json.Marshal(marker)
+		if err != nil {
+			return err
+		}
+		if err := grid.Put(key, raw); err != nil {
+			return err
+		}
+		if err := idB.Put([]byte(strconv.Itoa(marker.ID)), key); err != nil {
+			return err
+		}
+		created = FrontendMarker{
+			Name:     marker.Name,
+			ID:       marker.ID,
+			Map:      mapid,
+			Position: Position{X: x, Y: y},
+			Image:    marker.Image,
+			ShowName: marker.ShowName,
+		}
+		return nil
+	})
+	switch err {
+	case nil:
+	case errNoGridThere:
+		http.Error(rw, "there is no mapped ground there yet", http.StatusNotFound)
+		return
+	case errMarkerThere:
+		http.Error(rw, "there is already a marker on that spot", http.StatusConflict)
+		return
+	default:
+		log.Println("Error adding marker: ", err)
+		http.Error(rw, "could not save the marker", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("%q added marker %q on map %d at %d,%d", s.Username, name, mapid, x, y)
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(created)
+}
+
+var (
+	errNoGridThere = errors.New("no grid at that position")
+	errMarkerThere = errors.New("a marker already exists there")
+)
+
+// deleteMarker removes a marker outright, unlike hideMarker which only flags it
+// and leaves the row behind for good.
+func (m *Map) deleteMarker(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
+	s := m.getSession(req)
+	if s == nil || !(s.Auths.Has(AUTH_ADMIN) || s.Auths.Has(AUTH_WRITER)) {
+		http.Error(rw, "not allowed", http.StatusForbidden)
+		return
+	}
+	id := req.FormValue("id")
+	if id == "" {
+		http.Error(rw, "which marker?", http.StatusBadRequest)
+		return
+	}
+	name := ""
+	err := m.db.Update(func(tx *bbolt.Tx) error {
+		mb := tx.Bucket([]byte("markers"))
+		if mb == nil {
+			return errNoSuchMarker
+		}
+		grid := mb.Bucket([]byte("grid"))
+		idB := mb.Bucket([]byte("id"))
+		if grid == nil || idB == nil {
+			return errNoSuchMarker
+		}
+		key := idB.Get([]byte(id))
+		if key == nil {
+			return errNoSuchMarker
+		}
+		if raw := grid.Get(key); raw != nil {
+			existing := Marker{}
+			if json.Unmarshal(raw, &existing) == nil {
+				name = existing.Name
+			}
+			if err := grid.Delete(key); err != nil {
+				return err
+			}
+		}
+		return idB.Delete([]byte(id))
+	})
+	switch err {
+	case nil:
+	case errNoSuchMarker:
+		http.Error(rw, "there is no such marker", http.StatusNotFound)
+		return
+	default:
+		log.Println("Error deleting marker: ", err)
+		http.Error(rw, "could not delete the marker", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("%q deleted marker %s %q", s.Username, id, name)
+	rw.WriteHeader(http.StatusOK)
+}
+
+var errNoSuchMarker = errors.New("no marker with that id")

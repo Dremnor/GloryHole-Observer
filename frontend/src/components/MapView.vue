@@ -3,235 +3,143 @@
     <v-navigation-drawer
         :mini-variant.sync="mini"
         app
+        width="330"
+        mini-variant-width="48"
         style="z-index: 1000"
-        prominent>
-      <v-list-item>
-        <v-btn
-            icon
-            @click.stop="mini = !mini"
-            style="/*margin-left: -6px;*/"
-        >
-          <v-icon>mdi-arrow-expand</v-icon>
+        class="side">
+
+      <div class="side-head">
+        <v-btn icon small @click.stop="mini = !mini"
+               :title="mini ? 'Open the panel' : 'Close the panel'">
+          <v-icon>{{ mini ? 'mdi-chevron-right' : 'mdi-chevron-left' }}</v-icon>
         </v-btn>
-      </v-list-item>
+        <span v-if="!mini" class="side-head-title">{{ title }}</span>
+      </div>
 
-      <v-divider></v-divider>
+      <!-- COLLAPSED: on/off only, everything else lives in the open panel -->
+      <div v-if="mini" class="side-rail">
+        <v-btn v-for="t in railToggles" :key="t.key"
+               icon small
+               :disabled="!railEnabled(t)"
+               :title="railTitle(t)"
+               :class="['rail-btn', {'rail-btn--on': railOn(t)}]"
+               @click.stop="toggleRail(t)">
+          <v-icon>{{ railOn(t) ? t.icon : t.iconOff }}</v-icon>
+        </v-btn>
+      </div>
 
-      <v-list dense v-if="!mini">
-        <!-- HIDE GRID -->
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <v-btn width="100%" @click="showGridCoordinates = !showGridCoordinates">
-                {{ (!showGridCoordinates) ? 'Show' : 'Hide' }} grid coordinates
-              </v-btn>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
+      <div v-if="!mini" class="side-body">
 
-        <!-- ZOOM -->
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <v-btn width="100%" @click="zoomOut">
-                Zoom Out
-              </v-btn>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
+        <!-- FIND A WAYPOINT -->
+        <section class="side-section">
+          <v-autocomplete
+              v-model="selectedWaypoint"
+              :items="waypointItems"
+              :search-input.sync="waypointSearch"
+              :filter="alwaysMatch"
+              :menu-props="{maxHeight: 320}"
+              return-object
+              item-value="id"
+              dense outlined hide-details clearable
+              prepend-inner-icon="mdi-magnify"
+              placeholder="Find a waypoint"
+              :no-data-text="allMarks.length ? 'Nothing by that name' : 'No waypoints yet'">
+            <template v-slot:item="{item}">
+              <img class="wp-icon" :src="item.image + '.png'" @error="iconFallback" alt="">
+              <span class="wp-name">{{ item.name }}</span>
+              <span class="wp-type">{{ item.type }}</span>
+            </template>
+          </v-autocomplete>
+          <div v-if="waypointOverflow && waypointSearch" class="side-hint">
+            {{ waypointItems.length }} of {{ waypointMatches.length }} matches shown &mdash; keep typing to narrow it.
+          </div>
+        </section>
 
-        <!-- TO MAP -->
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <label class="title">Jump To Map</label>
-              <v-autocomplete return-object outlined dense :items="maps" v-model="selectedMap"
-                              placeholder="Select Map"></v-autocomplete>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
+        <!-- MAP -->
+        <section class="side-section">
+          <div class="side-heading">Map</div>
+          <v-autocomplete :items="maps" v-model="selectedMap" return-object
+                          dense outlined hide-details clearable label="Jump to map"/>
+          <v-autocomplete :items="maps" v-model="overlayMap" return-object
+                          dense outlined hide-details clearable label="Overlay map" class="mt-3"/>
+          <v-switch v-model="showGridCoordinates" dense inset hide-details
+                    label="Grid coordinates" class="side-switch"/>
+          <v-btn small outlined block class="mt-3" @click="zoomOut">
+            <v-icon left small>mdi-magnify-minus-outline</v-icon>
+            Zoom out
+          </v-btn>
+        </section>
 
-        <!-- SELECT OVERLAY -->
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <label class="title">Overlay Map</label>
-              <v-autocomplete return-object outlined dense :items="maps" v-model="overlayMap"
-                              placeholder="Select Map"></v-autocomplete>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
+        <!-- MARKERS -->
+        <section class="side-section">
+          <div class="side-heading-row">
+            <div class="side-heading">Markers</div>
+            <v-switch v-model="showMarkers" dense inset hide-details class="side-switch side-switch--head"/>
+          </div>
+          <div v-if="!canSeeMarkers" class="role-note">
+            Your account has no <code>markers</code> role, so the server sends none.
+          </div>
 
-        <!-- HIDE MARKER -->
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <v-btn class="short-btn" width="100%" @click="showMarkers = !showMarkers">
-                {{ (!showMarkers) ? 'Show' : 'Hide' }} Markers
-              </v-btn>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
+          <template v-if="showMarkers && markerCategories.length">
+            <v-autocomplete
+                v-model="shownCategories"
+                :items="markerCategories"
+                :menu-props="{maxHeight: 300}"
+                multiple dense outlined hide-details
+                label="Types on the map">
+              <template v-slot:selection="{index}">
+                <span v-if="index === 0" class="cat-summary">
+                  {{ shownCategories.length }} of {{ markerCategories.length }} types
+                </span>
+              </template>
+            </v-autocomplete>
+            <div class="side-actions">
+              <v-btn x-small text @click="showAllCategories">all</v-btn>
+              <v-btn x-small text @click="hideAllCategories">none</v-btn>
+            </div>
+            <!-- The picker only says how many types are on, so a type switched
+                 off months ago reads as a marker that stopped working. Name
+                 them, and make each one a click away from coming back. -->
+            <div v-if="hiddenCategoryChips.length" class="hidden-cats">
+              <span class="hidden-cats-label">Hidden:</span>
+              <v-chip v-for="name in hiddenCategoryChips" :key="name"
+                      x-small class="hidden-cat" close close-icon="mdi-eye"
+                      @click:close="toggleCategory(name)" @click="toggleCategory(name)">
+                {{ name }}
+              </v-chip>
+            </div>
+          </template>
 
-        <!-- TO ANY MARKER -->
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <!--              <label class="title">Markers</label>-->
-              <v-autocomplete return-object outlined dense :items="otherMarks" v-model="selectedMarker"
-                              placeholder="Select Marker">
+          <v-switch v-model="showThingwalls" dense inset hide-details
+                    label="Thingwalls" class="side-switch"/>
+          <v-switch v-model="showThingwallTooltips" dense inset hide-details :disabled="!showThingwalls"
+                    label="Thingwall names" class="side-switch side-switch--sub"/>
+          <v-switch v-model="showQuests" dense inset hide-details
+                    label="Quest givers" class="side-switch"/>
+          <v-switch v-model="showQuestTooltips" dense inset hide-details :disabled="!showQuests"
+                    label="Quest names" class="side-switch side-switch--sub"/>
+        </section>
 
-                <template v-slot:item="data">
-                  <img class="mr-2" style="width:24px;height: 24px;" :src="data.item.image + '.png'"/>
-                  {{ data.item.name }}
-                </template>
-              </v-autocomplete>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <v-btn class="short-btn" width="100%" @click="showThingwalls = !showThingwalls">
-                {{ (!showThingwalls) ? 'Show' : 'Hide' }} Thingwalls
-              </v-btn>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <!--              <label class="title">Thingwalls</label>-->
-              <v-autocomplete return-object outlined dense :items="thingMarks" v-model="selectedThing"
-                              placeholder="Select Marker">
-
-                <template v-slot:item="data">
-                  <img class="mr-2" style="width:24px;height: 24px;" :src="data.item.image + '.png'"/>
-                  {{ data.item.name }}
-                </template>
-              </v-autocomplete>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <v-btn class="short-btn" width="100%" @click="showThingwallTooltips = !showThingwallTooltips">
-                {{ (!showThingwallTooltips) ? 'Show' : 'Hide' }} Thingwall Tooltips
-              </v-btn>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <v-btn class="short-btn" width="100%" @click="showQuests = !showQuests">
-                {{ (!showQuests) ? 'Show' : 'Hide' }} Quest Givers
-              </v-btn>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <!--              <label class="title">Quest Givers</label>-->
-              <v-autocomplete return-object outlined dense :items="questMarks" v-model="selectedQuest"
-                              placeholder="Select Marker">
-
-                <template v-slot:item="data">
-                  <img class="mr-2" style="width:24px;height: 24px;" :src="data.item.image + '.png'"/>
-                  {{ data.item.name }}
-                </template>
-              </v-autocomplete>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <v-btn class="short-btn" width="100%" @click="showQuestTooltips = !showQuestTooltips">
-                {{ (!showQuestTooltips) ? 'Show' : 'Hide' }} Quest Tooltips
-              </v-btn>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <v-btn class="short-btn" width="100%" @click="showPlayers = !showPlayers">
-                {{ (!showPlayers) ? 'Show' : 'Hide' }} Players
-              </v-btn>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-        <!-- TO PLAYER -->
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <!--              <label class="title">Jump to Player</label>-->
-              <v-autocomplete return-object outlined dense :items="players" v-model="selectedPlayer"
-                              placeholder="Select Player">
-              </v-autocomplete>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-        <v-list-item>
-          <v-list-item-content>
-            <v-list-item-title>
-              <v-btn class="short-btn" width="100%" @click="showPlayerTooltips = !showPlayerTooltips">
-                {{ (!showPlayerTooltips) ? 'Show' : 'Hide' }} Players Names
-              </v-btn>
-            </v-list-item-title>
-          </v-list-item-content>
-        </v-list-item>
-
-      </v-list>
-
-
-      <!--        <div style="position: absolute;"><button class="btn btn-primary btn-sm" v-on:click="expandControlPanel = !expandControlPanel">-</button></div>-->
-      <!--        <div class="card-body" v-bind:class="{ hidden: !expandControlPanel }">-->
-      <!--          <div class="form-group">-->
-      <!--            <div class="form-check">-->
-      <!--              <input type="checkbox" class="form-check-input" id="check-grid-coords"-->
-      <!--                     v-model="showGridCoordinates">-->
-      <!--              <label class="form-check-label" for="check-grid-coords">Show grid coordinates</label>-->
-      <!--            </div>-->
-      <!--            <div class="form-check">-->
-      <!--              <input type="checkbox" class="form-check-input" id="check-hide-markers"-->
-      <!--                     v-model="hideMarkers">-->
-      <!--              <label class="form-check-label" for="check-hide-markers">Hide Markers</label>-->
-      <!--            </div>-->
-      <!--            <button type="button" class="btn btn-secondary" style="margin-top: 10px;" v-on:click="zoomOut">Zoom-->
-      <!--              out-->
-      <!--            </button>-->
-      <!--          </div>-->
-      <!--          <div class="form-group">-->
-      <!--            <label>Jump to Map</label>-->
-      <!--            <v-autocomplete :items="maps" v-model="selectedMap" placeholder="Select Map"></v-autocomplete>-->
-      <!--          </div>-->
-      <!--          <div class="form-group">-->
-      <!--            <label>Overlay Map</label>-->
-      <!--            <v-autocomplete :items="maps" v-model="overlayMap" placeholder="Select Map"></v-autocomplete>-->
-      <!--          </div>-->
-      <!--          <div class="form-group">-->
-      <!--            <label>Jump to Any Marker</label>-->
-      <!--            <v-autocomplete :items="allMarks" v-model="selectedMarker"-->
-      <!--                            placeholder="Select Marker"></v-autocomplete>-->
-      <!--          </div>-->
-      <!--          <div class="form-group">-->
-      <!--            <label>Jump to Player</label>-->
-      <!--            <v-autocomplete :items="players" v-model="selectedPlayer" placeholder="Select Player"></v-autocomplete>-->
-      <!--          </div>-->
-      <!--        </div>-->
+        <!-- PLAYERS -->
+        <section class="side-section">
+          <div class="side-heading-row">
+            <div class="side-heading">Players</div>
+            <v-switch v-model="showPlayers" dense inset hide-details class="side-switch side-switch--head"/>
+          </div>
+          <div v-if="!canSeePlayers" class="role-note">
+            Your account has no <code>point</code> role, so the server sends no characters.
+          </div>
+          <div v-else-if="showPlayers && !players.length" class="role-note">
+            Nobody is online, or the accounts uploading them are in a
+            <code>g1</code>&ndash;<code>g5</code> group yours does not share.
+          </div>
+          <v-autocomplete :items="players" v-model="selectedPlayer" return-object
+                          :disabled="!players.length"
+                          dense outlined hide-details clearable label="Jump to player"/>
+          <v-switch v-model="showPlayerTooltips" dense inset hide-details :disabled="!showPlayers"
+                    label="Player names" class="side-switch side-switch--sub"/>
+        </section>
+      </div>
     </v-navigation-drawer>
 
     <v-main>
@@ -250,19 +158,44 @@
               <a @click.prevent="queryCoordSet(tile.data)">Rewrite tile coords for {{ tile.data.coords.x }},
                 {{ tile.data.coords.y }}</a>
             </li>
+            <li>
+              <a @click.prevent="queryAddMarker(tile.data)">Add a marker here</a>
+            </li>
           </template>
         </vue-context>
 
         <vue-context ref="markermenu">
           <template slot-scope="data" v-if="data.data">
-            <li>
+            <!-- Hiding is what a client-uploaded marker needs: deleting one
+                 only invites it back on the client's next pass. A marker placed
+                 here has no client behind it, so hiding it would leave a row
+                 nobody can bring back. -->
+            <li v-if="!data.data.waypoint">
               <a @click.prevent="hideMarker(data.data)">Hide marker {{ data.data.name }}</a>
+            </li>
+            <li>
+              <a @click.prevent="deleteMarker(data.data)">Delete marker {{ data.data.name }}</a>
             </li>
           </template>
         </vue-context>
 
+        <modal name="addMarker" height="auto" :width="360">
+          <form class="wp-form" v-on:submit.prevent="submitMarker()">
+            <div class="wp-form-title">New marker</div>
+            <v-text-field v-model="newMarker.name" ref="newMarkerName" dense outlined autofocus
+                          label="Name" counter="80" maxlength="80" hide-details="auto"/>
+            <v-switch v-model="newMarker.showName" dense inset hide-details class="mt-2"
+                      label="Show the name on the map"/>
+            <div v-if="newMarker.error" class="wp-form-error">{{ newMarker.error }}</div>
+            <div class="wp-form-actions">
+              <v-btn small text @click="$modal.hide('addMarker')">Cancel</v-btn>
+              <v-btn small color="primary" type="submit" :disabled="!newMarker.name.trim()">Add</v-btn>
+            </div>
+          </form>
+        </modal>
+
         <modal name="coordSet">
-          <form v-on:submit.prevent="setCoords(form)">
+          <form v-on:submit.prevent="setCoords()">
             <input v-model="coordSet.x" class="input" type="text" placeholder="0">
             <input v-model="coordSet.y" class="input" type="text" placeholder="0">
             <button class="button is-primary">Submit</button>
@@ -274,8 +207,15 @@
 </template>
 
 <script>
-import ModelSelect from 'vue-search-select'
-import {GridCoordLayer, HnHCRS, HnHMaxZoom, HnHMinZoom, TileSize} from "../utils/LeafletCustomTypes";
+import {
+  GridCoordLayer,
+  HnHCRS,
+  HnHMaxZoom,
+  HnHMinZoom,
+  reportMissingIcon,
+  TileSize,
+  UnknownIconUrl
+} from "../utils/LeafletCustomTypes";
 import {SmartTileLayer} from "../utils/SmartTileLayer";
 import * as L from "leaflet";
 import {API_ENDPOINT} from "../main";
@@ -284,24 +224,85 @@ import {UniqueList} from "../data/UniqueList";
 import {Character} from "../data/Character";
 import VueContext from 'vue-context';
 
+// Sidebar state is remembered per browser, so a view someone has set up for
+// themselves survives a reload.
+const PREFS_KEY = 'hnhmap.viewPrefs';
+
+// The four switches the collapsed rail carries, in the order asked for. On and
+// off only — anything with settings behind it stays in the open panel.
+const RAIL_TOGGLES = [
+  {key: 'showMarkers', label: 'Markers', icon: 'mdi-map-marker', iconOff: 'mdi-map-marker-off'},
+  {key: 'showThingwalls', label: 'Thingwalls', icon: 'mdi-pillar', iconOff: 'mdi-pillar'},
+  {key: 'showQuests', label: 'Quest givers', icon: 'mdi-exclamation-thick', iconOff: 'mdi-exclamation-thick'},
+  {key: 'showPlayers', label: 'Players', icon: 'mdi-account-group', iconOff: 'mdi-account-off'}
+];
+
+// How many waypoints the search offers at once. Enough to browse, few enough
+// that opening the menu on a large map stays instant.
+const WAYPOINT_LIMIT = 200;
+
+const TOGGLE_PREFS = [
+  'mini', 'showGridCoordinates', 'showMarkers', 'showQuests', 'showQuestTooltips',
+  'showThingwalls', 'showThingwallTooltips', 'showPlayers', 'showPlayerTooltips'
+];
+
+// Read before the component exists, so restored values are the initial state and
+// no watcher fires against a map that has not been built yet.
+function loadPrefs() {
+  const prefs = {hidden: []};
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(PREFS_KEY) || '{}');
+    // Only recognised keys are adopted: a stale or hand-edited entry should not
+    // be able to put the component into a state it has no UI for.
+    TOGGLE_PREFS.forEach(k => {
+      if (typeof stored[k] === 'boolean') prefs[k] = stored[k];
+    });
+    if (Array.isArray(stored.hidden)) {
+      prefs.hidden = stored.hidden.filter(c => typeof c === 'string');
+    }
+  } catch (e) {
+    // Unreadable or blocked storage just means defaults.
+  }
+  return prefs;
+}
+
+function savePrefs(prefs) {
+  try {
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch (e) {
+    // Private browsing or a full quota: preferences simply do not persist.
+  }
+}
+
 export default {
   name: "MapView",
   components: {
-    ModelSelect,
     VueContext,
   },
   data: function () {
+    const saved = loadPrefs();
+    const pick = (key, fallback) => saved[key] === undefined ? fallback : saved[key];
     return {
-      mini: true,
-      showGridCoordinates: false,
-      showMarkers: false,
-      showQuests: false,
-      showQuestTooltips: false,
-      showThingwalls: true,
-      showThingwallTooltips: true,
-      showPlayers: true,
-      showPlayerTooltips: true,
+      // Remembered too: reopening the panel on every visit was busywork.
+      mini: pick('mini', true),
+      showGridCoordinates: pick('showGridCoordinates', false),
+      showMarkers: pick('showMarkers', false),
+      showQuests: pick('showQuests', false),
+      showQuestTooltips: pick('showQuestTooltips', false),
+      showThingwalls: pick('showThingwalls', true),
+      showThingwallTooltips: pick('showThingwallTooltips', true),
+      showPlayers: pick('showPlayers', true),
+      showPlayerTooltips: pick('showPlayerTooltips', true),
+      // Hidden rather than shown, so a marker type that turns up later is
+      // visible by default instead of silently suppressed.
+      hiddenCategories: saved.hidden,
+      markerCategories: [],
       expandControlPanel: true,
+      title: 'Map',
+      // One search box over every waypoint replaces the three near-identical
+      // pickers this panel used to carry.
+      selectedWaypoint: null,
+      waypointSearch: '',
 
       trackingCharacterId: -1,
       autoMode: false,
@@ -310,23 +311,94 @@ export default {
       // markersCache: [],
       allMarks: [],
       otherMarks: [],
-      marksCategories: [],
       thingMarks: [],
       questMarks: [],
       players: [],
       maps: [],
       selectedMap: null,
-      selectedMarker: null,
-      selectedQuest: null,
-      selectedThing: null,
-      selectedPlayer: {value: false},
-      overlayMap: {value: false},
+      selectedPlayer: null,
+      // Null rather than a placeholder object, so the picker's clear button
+      // has something to clear back to. Without a way to switch the overlay
+      // off, turning it on meant reloading the page.
+      overlayMap: null,
       auths: [],
       mapid: 0,
+      resizeObserver: null,
+      invalidateTimer: null,
+      newMarker: {name: '', showName: true, x: 0, y: 0, error: ''},
       coordSetFrom: {x: 0, y: 0},
       coordSet: {
         x: 0,
         y: 0
+      }
+    }
+  },
+  computed: {
+    // Watched as a whole so persistence lives in one place rather than in every
+    // toggle's handler.
+    viewPrefs() {
+      const prefs = {hidden: this.hiddenCategories};
+      TOGGLE_PREFS.forEach(k => {
+        prefs[k] = this[k];
+      });
+      return prefs;
+    },
+    // Characters and markers are withheld by role, and until now the only sign
+    // of that was a toggle that did nothing. The server sends the session's
+    // roles with the rest of the config, so say which one is missing.
+    canSeePlayers() {
+      return this.auths.length === 0 || this.auths.includes('point');
+    },
+    canSeeMarkers() {
+      return this.auths.length === 0 || this.auths.includes('markers');
+    },
+    railToggles() {
+      return RAIL_TOGGLES;
+    },
+    // Matched here rather than by the autocomplete's own filter, which only
+    // looks at the displayed name — searching for "cave" should find every
+    // cave, not just the ones somebody named "cave".
+    waypointMatches() {
+      const q = (this.waypointSearch || '').trim().toLowerCase();
+      if (!q) {
+        return this.allMarks;
+      }
+      return this.allMarks.filter(m =>
+          (m.name && m.name.toLowerCase().indexOf(q) !== -1) ||
+          (m.type && m.type.toLowerCase().indexOf(q) !== -1));
+    },
+    // A menu of every waypoint on a well-explored map would be thousands of
+    // rows long and slow to open. The count of what was left out is shown
+    // under the field rather than swallowed.
+    waypointItems() {
+      return this.waypointMatches.slice(0, WAYPOINT_LIMIT);
+    },
+    waypointOverflow() {
+      return this.waypointMatches.length > this.waypointItems.length;
+    },
+    // Only the ones that exist right now: a stored preference for a type with
+    // no markers on this server is nothing the viewer can act on.
+    hiddenCategoryChips() {
+      return this.markerCategories
+          .map(c => c.name)
+          .filter(name => this.hiddenCategories.indexOf(name) !== -1);
+    },
+    // The panel offers the types that are shown while the stored preference is
+    // the set that is hidden, so that a type appearing later is visible by
+    // default rather than silently suppressed.
+    shownCategories: {
+      get() {
+        return this.markerCategories
+            .map(c => c.name)
+            .filter(name => this.hiddenCategories.indexOf(name) === -1);
+      },
+      set(value) {
+        const known = this.markerCategories.map(c => c.name);
+        const shown = new Set(value);
+        // Types with no markers right now are not on offer, so leave whatever
+        // was stored about them alone instead of quietly revealing them.
+        const untouched = this.hiddenCategories.filter(name => known.indexOf(name) === -1);
+        this.hiddenCategories = untouched.concat(known.filter(name => !shown.has(name)));
       }
     }
   },
@@ -339,46 +411,28 @@ export default {
         this.coordLayer.setOpacity(0);
       }
     },
-    showMarkers(value) {
-      console.log("showMarkers", value);
-      if (!value) {
-        this.otherMarks.forEach(it => it.remove(this));
-      } else {
-        this.otherMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => it.add(this));
-      }
+    // Every marker toggle routes through one place, so the category
+    // checkboxes and the category switches cannot disagree about what is drawn.
+    showMarkers() {
+      this.applyMarkerVisibility();
     },
-    showThingwalls(value) {
-      console.log("showThingwalls", value);
-      if (!value) {
-        this.thingMarks.forEach(it => it.remove(this));
-      } else {
-        this.thingMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-          it.add(this);
-          it.tooltip(this.showThingwallTooltips);
-        });
-      }
+    showThingwalls() {
+      this.applyMarkerVisibility();
     },
-    showQuests(value) {
-      console.log("showQuests", value);
-      if (!value) {
-        this.questMarks.forEach(it => it.remove(this));
-      } else {
-        this.questMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-          it.add(this);
-          it.tooltip(this.showQuestTooltips);
-        });
-      }
+    showQuests() {
+      this.applyMarkerVisibility();
     },
-    showPlayers(value) {
-      console.log("showPlayers", value);
-      if (!value) {
-        this.characters.getElements().forEach(it => it.remove(this));
-      } else {
-        this.characters.getElements().filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-          it.add(this);
-          it.tooltip(this.showPlayers);
-        });
-      }
+    hiddenCategories() {
+      this.applyMarkerVisibility();
+    },
+    viewPrefs: {
+      handler(prefs) {
+        savePrefs(prefs);
+      },
+      deep: true
+    },
+    showPlayers() {
+      this.applyCharacterVisibility();
     },
     showThingwallTooltips(value) {
       console.log("showThingwallTooltips", value);
@@ -400,12 +454,12 @@ export default {
           let latlng = this.map.unproject([character.position.x, character.position.y], HnHMaxZoom);
           this.map.setView(latlng, HnHMaxZoom - Math.floor(HnHMaxZoom - HnHMinZoom) / 2);
 
-          this.$router.push({path: `/character/${value}`});
+          this.goTo(`/character/${value}`, true);
           this.autoMode = true;
         } else {
           this.map.setView([0, 0], HnHMinZoom);
           let mapid = this.maps[0].ID;
-          this.$router.replace({path: `/grid/${mapid}/0/0/${HnHMinZoom}`});
+          this.goTo(`/grid/${mapid}/0/0/${HnHMinZoom}`);
           this.trackingCharacterId = -1;
         }
       }
@@ -417,129 +471,31 @@ export default {
         let zoom = this.map.getZoom();
         this.map.setView([0, 0], zoom);
 
-        this.$router.replace({path: `/grid/${this.mapid}/0/0/${zoom}`});
+        this.goTo(`/grid/${this.mapid}/0/0/${zoom}`);
         this.trackingCharacterId = -1;
       }
     },
     overlayMap(value) {
-      console.log("overlayMap");
-      if (value) {
-        this.overlayLayer.map = value.ID;
-        this.overlayLayer.redraw();
-        if (this.showMarkers) {
-          this.otherMarks.forEach(it => it.remove(this));
-          this.otherMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => it.add(this));
-        }
-        if (this.showThingwalls) {
-          this.thingMarks.forEach(it => it.remove(this));
-          this.thingMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showThingwallTooltips);
-          });
-        }
-        if (this.showQuests) {
-          this.questMarks.forEach(it => it.remove(this));
-          this.questMarks.filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showQuestTooltips);
-          });
-        }
-        if (this.showPlayers) {
-          this.characters.getElements().forEach(it => it.remove(this));
-          this.characters.getElements().filter(it => it.map === this.mapid || it.map === this.overlayLayer.map).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showPlayerTooltips);
-          });
-        }
-      } else {
-        this.overlayLayer.map = -1;
-        this.overlayLayer.redraw();
-        if (this.showMarkers) {
-          this.otherMarks.forEach(it => it.remove(this));
-          this.otherMarks.filter(it => it.map === this.mapid).forEach(it => it.add(this));
-        }
-        if (this.showThingwalls) {
-          this.thingMarks.forEach(it => it.remove(this));
-          this.thingMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showThingwallTooltips);
-          });
-        }
-        if (this.showQuests) {
-          this.questMarks.forEach(it => it.remove(this));
-          this.questMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showPlayerTooltips);
-          });
-        }
-        if (this.showPlayers) {
-          this.characters.getElements().forEach(it => it.remove(this));
-          this.characters.getElements().filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showPlayerTooltips);
-          });
-        }
-      }
+      this.overlayLayer.map = value ? value.ID : -1;
+      this.overlayLayer.redraw();
+      this.applyMarkerVisibility();
+      this.applyCharacterVisibility();
     },
-    selectedMarker(value) {
-      //selectedMap
-      console.log('selectedMarker', value);
-      if (value) {
-        let markerMapId = value.map;
-
-        this.maps.forEach((map) => {
-          if (markerMapId === map.ID) {
-            this.selectedMap = map;
-
-            if (this.mapid !== map.ID)
-              this.changeMap(map.ID);
-
-            this.map.setView(value.marker.getLatLng(), HnHMaxZoom - Math.floor(HnHMaxZoom - HnHMinZoom) / 2);
-            this.trackingCharacterId = -1;
-            return;
-          }
-        })
+    // One watcher where there were three near-identical ones, each of which
+    // read value.marker.getLatLng() and so threw if the marker was not
+    // currently drawn — which is exactly the case when you search for
+    // something you have switched off.
+    selectedWaypoint(value) {
+      if (!value) {
+        return;
       }
-    },
-    selectedQuest(value) {
-      //selectedMap
-      console.log('selectedQuest', value);
-      if (value) {
-        let markerMapId = value.map;
-
-        this.maps.forEach((map) => {
-          if (markerMapId === map.ID) {
-            this.selectedMap = map;
-
-            if (this.mapid !== map.ID)
-              this.changeMap(map.ID);
-
-            this.map.setView(value.marker.getLatLng(), HnHMaxZoom - Math.floor(HnHMaxZoom - HnHMinZoom) / 2);
-            this.trackingCharacterId = -1;
-            return;
-          }
-        })
-      }
-    },
-    selectedThing(value) {
-      //selectedMap
-      console.log('selectedThing', value);
-      if (value) {
-        let markerMapId = value.map;
-
-        this.maps.forEach((map) => {
-          if (markerMapId === map.ID) {
-            this.selectedMap = map;
-
-            if (this.mapid !== map.ID)
-              this.changeMap(map.ID);
-
-            this.map.setView(value.marker.getLatLng(), HnHMaxZoom - Math.floor(HnHMaxZoom - HnHMinZoom) / 2);
-            this.trackingCharacterId = -1;
-            return;
-          }
-        })
-      }
+      this.jumpToMarker(value);
+      // The field is a search box, not a selection: clear it so the next
+      // search starts from empty.
+      this.$nextTick(() => {
+        this.selectedWaypoint = null;
+        this.waypointSearch = '';
+      });
     },
     selectedPlayer(value) {
       if (value && value.id) {
@@ -556,7 +512,11 @@ export default {
     }, () => this.$emit("error"));
   },
   beforeDestroy: function () {
-    clearInterval(this.intervalId)
+    clearInterval(this.intervalId);
+    clearTimeout(this.invalidateTimer);
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+    }
   },
   methods: {
     setupMap(characters, maps) {
@@ -584,15 +544,15 @@ export default {
         map.value = map.ID;
         this.maps.push(map);
       }
-      this.maps.sort((a, b) => {
-        return a.size < b.size;
-      });
+      // Names default to the map's numeric ID, so compare numerically where
+      // possible and fall back to the ID for a stable order.
+      this.maps.sort((a, b) => a.Name.localeCompare(b.Name, undefined, {numeric: true}) || a.ID - b.ID);
 
       // Update url on manual drag, zoom
       this.map.on("drag", () => {
         let point = this.map.project(this.map.getCenter(), this.map.getZoom());
         let coordinate = {x: ~~(point.x / TileSize), y: ~~(point.y / TileSize), z: this.map.getZoom()};
-        this.$router.replace({path: `/grid/${this.mapid}/${coordinate.x}/${coordinate.y}/${coordinate.z}`});
+        this.goTo(`/grid/${this.mapid}/${coordinate.x}/${coordinate.y}/${coordinate.z}`);
         this.trackingCharacterId = -1;
       });
       this.map.on("zoom", () => {
@@ -605,7 +565,7 @@ export default {
             y: Math.floor(point.y / TileSize),
             z: this.map.getZoom()
           };
-          this.$router.replace({path: `/grid/${this.mapid}/${coordinate.x}/${coordinate.y}/${coordinate.z}`});
+          this.goTo(`/grid/${this.mapid}/${coordinate.x}/${coordinate.y}/${coordinate.z}`);
           this.trackingCharacterId = -1;
         }
       });
@@ -637,6 +597,15 @@ export default {
       this.markerLayer = L.layerGroup();
       this.markerLayer.addTo(this.map);
 
+      // Leaflet lays its tiles out from the container size it measured, and
+      // never notices the container changing on its own. Opening or closing
+      // the panel resizes it, and the tiles kept the old geometry — leaving a
+      // black band down the side of the map until the page was reloaded.
+      if (window.ResizeObserver) {
+        this.resizeObserver = new ResizeObserver(() => this.scheduleInvalidate());
+        this.resizeObserver.observe(this.$refs.map);
+      }
+
       /*this.map.on('mousemove', (mev) => {
           coords = this.map.project(mev.latlng, this.map.getZoom());
       })*/
@@ -645,7 +614,13 @@ export default {
         if (this.auths.includes('admin') || this.auths.includes('writer')) {
           let point = this.map.project(mev.latlng, this.map.getZoom());
           let coords = {x: Math.floor(point.x / TileSize), y: Math.floor(point.y / TileSize)};
-          this.$refs.menu.open(mev.originalEvent, {coords: coords});
+          // Markers are stored in max-zoom pixels, so take the exact point
+          // there rather than deriving it from the tile the click landed on.
+          let exact = this.map.project(mev.latlng, HnHMaxZoom);
+          this.$refs.menu.open(mev.originalEvent, {
+            coords: coords,
+            point: {x: Math.round(exact.x), y: Math.round(exact.y)}
+          });
         }
       }).bind(this));
 
@@ -673,7 +648,7 @@ export default {
           };
           coordinate.x += merge['Shift'].x;
           coordinate.y += merge['Shift'].y;
-          this.$router.replace({path: `/grid/${mapTo}/${coordinate.x}/${coordinate.y}/${coordinate.z}`});
+          this.goTo(`/grid/${mapTo}/${coordinate.x}/${coordinate.y}/${coordinate.z}`);
 
           let latLng = this.toLatLng(coordinate.x * 100, coordinate.y * 100);
 
@@ -720,11 +695,7 @@ export default {
         });
       }, 2000);
       // Request markers
-      this.$http.get(`${API_ENDPOINT}/v1/markers`).then(response => {
-        this.updateMarkers(response.body);
-      }, () => {
-        this.$emit("error")
-      });
+      this.refreshMarkers();
     },
     updateMarkers(markersData) {
       this.markers.update(markersData.map(it => {
@@ -738,15 +709,20 @@ export default {
             return m;
           }),
           (marker) => { // Add
-            if (marker.map === this.mapid || marker.map === this.overlayLayer.map) {
+            // Respect the sidebar toggles, otherwise a marker refresh brings
+            // back categories the user has just hidden.
+            if (this.markerVisible(marker)) {
               marker.add(this);
+              marker.tooltip(this.markerTooltipState(marker));
             }
             marker.setClickCallback(() => {
               this.map.setView(marker.marker.getLatLng(), this.map.getZoom());
             });
             marker.setContextMenu((mev) => {
               if (this.auths.includes('admin') || this.auths.includes('writer')) {
-                this.$refs.markermenu.open(mev.originalEvent, {name: marker.name, id: marker.id});
+                this.$refs.markermenu.open(mev.originalEvent, {
+                  name: marker.name, id: marker.id, waypoint: marker.type === "waypoint"
+                });
               }
             });
           },
@@ -756,6 +732,9 @@ export default {
           (marker, updated) => { // Update
             marker.update(this, updated);
           });
+      // Anything the update above took off the map is put back by the same
+      // rule that decides visibility everywhere else.
+      this.applyMarkerVisibility();
       // this.markersCache.length = 0;
       // this.markers.getElements().forEach(it => this.markersCache.push(it));
       /*this.markersCache.sort((a, b) => {
@@ -767,9 +746,10 @@ export default {
       this.otherMarks.length = 0;
       this.thingMarks.length = 0;
       this.questMarks.length = 0;
+      // By name, because that is how the search lists them; the image only
+      // breaks ties between waypoints sharing a name.
       this.markers.getElements().filter(it => it.name != null && it.name.length > 0 && !it.hidden).sort((a, b) => {
-        let im = a.image.localeCompare(b.image);
-        return im === 0 ? a.name.localeCompare(b.name) : im;
+        return a.name.localeCompare(b.name, undefined, {numeric: true}) || a.image.localeCompare(b.image);
       }).forEach(it => {
         this.allMarks.push(it);
         if (it.type === "thingwall")
@@ -778,10 +758,29 @@ export default {
           this.questMarks.push(it);
         else
           this.otherMarks.push(it);
-
-        if (!this.marksCategories.includes(it.type))
-          this.marksCategories.push(it.type);
       });
+
+      // Counted over every marker rather than over the search list above, which
+      // drops the nameless ones. A marker with no name still draws, so leaving
+      // it out undercounted its type — and a type whose markers are all
+      // nameless had no checkbox at all, which made it impossible to switch
+      // back on once it had been hidden.
+      // Thingwalls and quest givers are left out: they have their own switches
+      // above, and listing them twice would give two controls for one thing.
+      const counts = {};
+      this.markers.getElements().forEach(it => {
+        if (it.hidden || it.type === "thingwall" || it.type === "quest") {
+          return;
+        }
+        counts[it.type] = (counts[it.type] || 0) + 1;
+      });
+      // text and value are what the type picker searches and stores.
+      this.markerCategories = Object.keys(counts).sort().map(name => ({
+        name,
+        count: counts[name],
+        text: `${name} (${counts[name]})`,
+        value: name
+      }));
     },
     updateCharacters(charactersData) {
       this.characters.update(charactersData.map(it => {
@@ -790,7 +789,6 @@ export default {
             return ch;
           }),
           (character) => { // Add
-            character.add(this);
             character.setClickCallback(() => { // Zoom to character on marker click
               this.trackingCharacterId = character.id;
             });
@@ -809,11 +807,169 @@ export default {
             character.update(this, updated);
           }
       );
+      // Drawing is decided here rather than in the callbacks above, so a
+      // character that has just changed map is added or removed by the same
+      // rule as one the viewer has toggled.
+      this.applyCharacterVisibility();
       this.players.length = 0;
       this.characters.getElements().forEach(it => this.players.push(it));
     },
+    // Same fallback the map markers use, for the icons shown in the sidebar
+    // pickers. Without it a marker whose icon this server lacks is a blank gap
+    // in the list.
+    iconFallback(event) {
+      const img = event.target;
+      if (img.src === UnknownIconUrl) {
+        return;
+      }
+      reportMissingIcon(img.getAttribute('src'));
+      img.src = UnknownIconUrl;
+    },
+    // Whether a marker belongs on screen right now: on a visible map layer, in a
+    // group that is switched on, and of a type the user has not hidden.
+    markerVisible(marker) {
+      if (marker.map !== this.mapid && marker.map !== this.overlayLayer.map) {
+        return false;
+      }
+      // Thingwalls and quest givers keep their own switches; the per-type
+      // checkboxes below cover everything else.
+      if (marker.type === "thingwall") return this.showThingwalls;
+      if (marker.type === "quest") return this.showQuests;
+      if (this.hiddenCategories.indexOf(marker.type) !== -1) return false;
+      return this.showMarkers;
+    },
+    // The single place that decides what is on the map. Every toggle calls this
+    // rather than adding and removing markers itself.
+    applyMarkerVisibility() {
+      this.markers.getElements().forEach(marker => {
+        const wanted = this.markerVisible(marker);
+        const shown = Boolean(marker.marker);
+        if (wanted && !shown) {
+          marker.add(this);
+          marker.tooltip(this.markerTooltipState(marker));
+        } else if (!wanted && shown) {
+          marker.remove(this);
+        }
+      });
+    },
+    // Characters only ever draw on the map the viewer is looking at — Character
+    // itself refuses to add otherwise — so the overlay layer is not consulted.
+    applyCharacterVisibility() {
+      this.characters.getElements().forEach(character => {
+        const wanted = this.showPlayers && character.map === this.mapid;
+        const shown = Boolean(character.marker);
+        if (wanted && !shown) {
+          character.add(this);
+          character.tooltip(this.showPlayerTooltips);
+        } else if (!wanted && shown) {
+          character.remove(this);
+        }
+      });
+    },
+    toggleCategory(name) {
+      const idx = this.hiddenCategories.indexOf(name);
+      if (idx === -1) {
+        this.hiddenCategories.push(name);
+      } else {
+        this.hiddenCategories.splice(idx, 1);
+      }
+    },
+    categoryShown(name) {
+      return this.hiddenCategories.indexOf(name) === -1;
+    },
+    // Moving the map rewrites the URL, and a jump often lands on the URL that
+    // is already showing. vue-router rejects that navigation, which surfaces as
+    // an unhandled rejection in the console on every such move.
+    goTo(path, push) {
+      const nav = push ? this.$router.push(path) : this.$router.replace(path);
+      if (nav && nav.catch) {
+        nav.catch(() => {
+        });
+      }
+    },
+    // Coalesced, because a resize observer fires on every frame of the
+    // drawer's animation.
+    scheduleInvalidate() {
+      if (this.invalidateTimer) {
+        return;
+      }
+      this.invalidateTimer = setTimeout(() => {
+        this.invalidateTimer = null;
+        if (this.map) {
+          this.map.invalidateSize({pan: false});
+        }
+      }, 50);
+    },
+    railOn(toggle) {
+      return this[toggle.key];
+    },
+    // Thingwalls and quest givers are markers, so all three need the same role.
+    railEnabled(toggle) {
+      return toggle.key === 'showPlayers' ? this.canSeePlayers : this.canSeeMarkers;
+    },
+    railTitle(toggle) {
+      if (!this.railEnabled(toggle)) {
+        return `${toggle.label} — your account cannot see these`;
+      }
+      return `${toggle.label} — ${this.railOn(toggle) ? 'on' : 'off'}`;
+    },
+    toggleRail(toggle) {
+      this[toggle.key] = !this[toggle.key];
+    },
+    // The autocomplete filters on the displayed name alone; waypointMatches
+    // has already matched on name and type, so let everything through.
+    alwaysMatch() {
+      return true;
+    },
+    // Works from the marker's stored position rather than its Leaflet marker,
+    // so it can jump to something that is not currently drawn.
+    jumpToMarker(marker) {
+      if (!marker) {
+        return;
+      }
+      this.revealMarker(marker);
+      const map = this.maps.find(m => m.ID === marker.map);
+      if (map) {
+        this.selectedMap = map;
+      }
+      if (this.mapid !== marker.map) {
+        this.changeMap(marker.map);
+      }
+      const latlng = this.map.unproject([marker.position.x, marker.position.y], HnHMaxZoom);
+      this.map.setView(latlng, HnHMaxZoom - Math.floor(HnHMaxZoom - HnHMinZoom) / 2);
+      this.trackingCharacterId = -1;
+    },
+    // Searching for something you have switched off and being taken to an
+    // empty patch of map would be no help, so turn it back on.
+    revealMarker(marker) {
+      if (marker.type === "thingwall") {
+        this.showThingwalls = true;
+      } else if (marker.type === "quest") {
+        this.showQuests = true;
+      } else {
+        this.showMarkers = true;
+        const idx = this.hiddenCategories.indexOf(marker.type);
+        if (idx !== -1) {
+          this.hiddenCategories.splice(idx, 1);
+        }
+      }
+    },
+    showAllCategories() {
+      this.hiddenCategories = [];
+    },
+    hideAllCategories() {
+      this.hiddenCategories = this.markerCategories.map(c => c.name);
+    },
+    markerTooltipState(marker) {
+      if (marker.type === "thingwall") return this.showThingwallTooltips;
+      if (marker.type === "quest") return this.showQuestTooltips;
+      // Placed from the map view with the label switched on: the name is the
+      // point of the marker, so it is not hidden behind a hover.
+      return marker.showName === true;
+    },
     processConfig(config) {
       document.title = config.title;
+      this.title = config.title;
       this.auths = config.auths;
     },
     toLatLng(x, y) {
@@ -823,19 +979,58 @@ export default {
       this.trackingCharacterId = -1;
       this.map.setView([0, 0], HnHMinZoom);
     },
+    queryAddMarker(data) {
+      this.newMarker = {name: '', showName: true, x: data.point.x, y: data.point.y, error: ''};
+      this.$modal.show('addMarker');
+    },
+    submitMarker() {
+      const wp = this.newMarker;
+      const name = wp.name.trim();
+      if (!name) {
+        return;
+      }
+      this.$http.post(`${API_ENDPOINT}/admin/addMarker`, null, {
+        params: {map: this.mapid, x: wp.x, y: wp.y, name: name, showName: wp.showName}
+      }).then(() => {
+        this.$modal.hide('addMarker');
+        this.refreshMarkers();
+      }, response => {
+        // The server refuses on ground it has no tiles for and on a spot that
+        // already holds a marker; both are worth saying rather than leaving the
+        // dialog looking like it worked.
+        wp.error = (response && response.bodyText) || 'The marker could not be saved.';
+      });
+    },
+    refreshMarkers() {
+      this.$http.get(`${API_ENDPOINT}/v1/markers`).then(response => {
+        this.updateMarkers(response.body);
+      }, () => this.$emit("error"));
+    },
     wipeTile(data) {
-      this.$http.get(`${API_ENDPOINT}/admin/wipeTile`, {params: {...data.coords, map: this.mapid}});
+      this.$http.post(`${API_ENDPOINT}/admin/wipeTile`, null, {params: {...data.coords, map: this.mapid}});
     },
     hideMarker(data) {
-      this.$http.get(`${API_ENDPOINT}/admin/hideMarker`, {params: {id: data.id}});
-      this.markers.byId(data.id).remove(this);
+      this.$http.post(`${API_ENDPOINT}/admin/hideMarker`, null, {params: {id: data.id}})
+          .then(() => this.refreshMarkers());
+      const marker = this.markers.byId(data.id);
+      if (marker) {
+        marker.remove(this);
+      }
+    },
+    deleteMarker(data) {
+      this.$http.post(`${API_ENDPOINT}/admin/deleteMarker`, null, {params: {id: data.id}})
+          .then(() => this.refreshMarkers());
+      const marker = this.markers.byId(data.id);
+      if (marker) {
+        marker.remove(this);
+      }
     },
     queryCoordSet(data) {
       this.coordSetFrom = data.coords;
       this.$modal.show('coordSet');
     },
-    setCoords(form) {
-      this.$http.get(`${API_ENDPOINT}/admin/setCoords`, {
+    setCoords() {
+      this.$http.post(`${API_ENDPOINT}/admin/setCoords`, null, {
         params: {
           map: this.mapid,
           fx: this.coordSetFrom.x,
@@ -846,41 +1041,21 @@ export default {
       });
     },
     changeMap(mapid) {
-      if (mapid !== this.mapid) {
-        this.mapid = mapid;
-        this.layer.map = this.mapid;
-        this.layer.redraw();
-        this.overlayLayer.map = -1;
-        this.overlayLayer.redraw();
-        if (this.showMarkers) {
-          this.otherMarks.forEach(it => it.remove(this));
-          this.otherMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(false);
-          });
-        }
-        if (this.showThingwalls) {
-          this.thingMarks.forEach(it => it.remove(this));
-          this.thingMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showThingwallTooltips);
-          });
-        }
-        if (this.showQuests) {
-          this.questMarks.forEach(it => it.remove(this));
-          this.questMarks.filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showQuestTooltips);
-          });
-        }
-        if (this.showPlayers) {
-          this.characters.getElements().forEach(it => it.remove(this));
-          this.characters.getElements().filter(it => it.map === this.mapid).forEach(it => {
-            it.add(this);
-            it.tooltip(this.showPlayerTooltips);
-          });
-        }
+      // Route parameters arrive as strings, so opening /grid/2/... directly used
+      // to leave mapid as "2" while every marker, character and tile update
+      // carries a number. The strict comparisons then never matched and the map
+      // came up empty — the long-standing "refresh does not update the map".
+      mapid = Number(mapid);
+      if (!Number.isFinite(mapid) || mapid === this.mapid) {
+        return;
       }
+      this.mapid = mapid;
+      this.layer.map = this.mapid;
+      this.layer.redraw();
+      this.overlayLayer.map = -1;
+      this.overlayLayer.redraw();
+      this.applyMarkerVisibility();
+      this.applyCharacterVisibility();
     }
   }
 }
@@ -892,8 +1067,11 @@ export default {
   padding: 0px !important;
 }
 
+/* The area beside the panel, not the whole viewport: v-main already indents
+   the content by the drawer's width, so 100vw pushed the map that far off the
+   right edge. */
 .map {
-  width: 100vw;
+  width: 100%;
   height: 100vh;
 }
 
@@ -928,52 +1106,191 @@ export default {
   z-index: 502;
 }
 
-.v-list-item {
-  padding: 0px !important;
-  min-height: 0px !important;
-  margin-left: 0 !important;
-  height: auto !important;
+/* The panel used to strip padding off every button in the app so they would
+   fit, which left them looking like the labels of the dropdowns they sat next
+   to. Switches say what they do and show their state, and the styling below is
+   scoped to the panel rather than imposed on Vuetify globally. */
+.side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 4px 0 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
 }
 
-.v-btn {
-  padding: 0px !important;
+.side-head-title {
+  font-size: 15px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.short-btn {
-  min-height: auto !important;
-  height: auto !important;
-  text-transform: none !important;
+.side-body {
+  height: calc(100% - 48px);
+  overflow-y: auto;
+  padding: 4px 12px 24px;
 }
 
-.v-list {
-  padding: 5px !important;
-  height: auto !important;
-  min-height: 0px !important;
+/* Collapsed panel: the four things worth reaching without opening it. An icon
+   that is off is outlined and faded, so the state reads at a glance rather
+   than only on hover. */
+.side-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
 }
 
-.v-navigation-drawer__content {
-  padding: 0px !important;
+.side .rail-btn .v-icon {
+  color: rgba(0, 0, 0, 0.38);
 }
 
-.v-navigation-drawer {
-  width: auto !important;
+.side .rail-btn--on .v-icon {
+  color: #1976d2;
 }
 
-.v-text-field__details {
-  min-height: 0px !important;
-  margin: 0px !important;
+.side-section {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
-.v-messages {
-  min-height: 0px !important;
+.side-section:last-child {
+  border-bottom: none;
 }
 
-.v-list-item__content {
-  padding: 0px !important;
+.side-heading {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-bottom: 8px;
 }
 
-.v-input__slot {
-  padding: 0px 5px !important;
+.side-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.side-heading-row .side-heading {
+  margin-bottom: 0;
+}
+
+.side .side-switch {
+  margin-top: 10px;
+  padding-top: 0;
+}
+
+.side .side-switch--head {
+  margin-top: 0;
+}
+
+/* A switch that only makes sense while its section is on, indented to say so. */
+.side .side-switch--sub {
+  margin-left: 14px;
+}
+
+.side .side-switch .v-label {
+  font-size: 13px;
+}
+
+.side-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.side-hint {
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.7;
+  padding: 4px 2px 0;
+}
+
+.cat-summary {
+  font-size: 13px;
+}
+
+.hidden-cats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.hidden-cats-label {
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  opacity: .6;
+}
+
+.hidden-cat {
+  cursor: pointer;
+}
+
+.wp-form {
+  padding: 18px 20px 14px;
+}
+
+.wp-form-title {
+  font-size: 15px;
+  font-weight: 500;
+  margin-bottom: 14px;
+}
+
+.wp-form-error {
+  color: #c62828;
+  font-size: 12px;
+  line-height: 1.35;
+  padding-top: 8px;
+}
+
+.wp-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 14px;
+}
+
+/* Rows of the waypoint search: icon, name, and the type on the right. */
+.wp-icon {
+  width: 20px;
+  height: 20px;
+  margin-right: 10px;
+  image-rendering: pixelated;
+  flex: 0 0 auto;
+}
+
+.wp-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wp-type {
+  flex: 0 0 auto;
+  margin-left: 10px;
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+.role-note {
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.75;
+  padding: 6px 2px 0;
+}
+
+.role-note code {
+  font-size: 11px;
+  padding: 0 2px;
 }
 
 .leaflet-tooltip {

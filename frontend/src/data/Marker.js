@@ -1,12 +1,22 @@
 import {HnHMaxZoom, ImageIcon} from "../utils/LeafletCustomTypes";
 import * as L from "leaflet";
 
-function detectType(name) {
-    if (name === "gfx/invobjs/small/bush" || name === "gfx/invobjs/small/bumling" || name === "gfx/terobjs/mm/gianttoad") return "quest";
-    if (name === "gfx/terobjs/mm/thingwall") return "thingwall";
-    if (name === "custom") return "custom";
-    let idx = name.lastIndexOf("/");
-    return idx === -1 ? name : name.substring(name.lastIndexOf("/") + 1);
+// Markers an admin drops from the map view. A real file under public/, so the
+// icon panel lists it and it can be replaced there like any other.
+export const WaypointImage = "gfx/hnhmap/waypoint";
+
+function detectType(image, markerName) {
+    if (image === WaypointImage) return "waypoint";
+    // Caves go by their marker name rather than their image: the client reports
+    // them under assorted images, and the map has always drawn them with the
+    // cave icon, so they belong in one category rather than scattered across
+    // several.
+    if (markerName && markerName.toLowerCase() === "cave") return "cave";
+    if (image === "gfx/invobjs/small/bush" || image === "gfx/invobjs/small/bumling" || image === "gfx/terobjs/mm/gianttoad") return "quest";
+    if (image === "gfx/terobjs/mm/thingwall") return "thingwall";
+    if (image === "custom") return "custom";
+    let idx = image.lastIndexOf("/");
+    return idx === -1 ? image : image.substring(idx + 1);
 }
 
 export class Marker {
@@ -15,11 +25,13 @@ export class Marker {
         this.position = markerData.position;
         this.name = markerData.name;
         this.image = markerData.image;
-        this.type = detectType(this.image);
+        this.type = detectType(this.image, this.name);
         this.marker = false;
         this.text = this.name;
         this.value = this.id;
         this.hidden = markerData.hidden;
+        // Set on admin-placed markers whose label is the point of them.
+        this.showName = markerData.showName === true;
         this.map = markerData.map;
         this.onClick = null;
         this.onContext = null;
@@ -46,7 +58,19 @@ export class Marker {
             let isCave = this.name.toLowerCase() === "cave";
             let hsz = 9;
 
-            if (isCustom && !isCave) {
+            if (this.type === "waypoint") {
+                // A pin rather than a blob: it points at a spot the way a map
+                // pin does, so it is anchored at its tip.
+                icon = new ImageIcon({
+                    iconUrl: `${WaypointImage}.png`,
+                    iconSize: [24, 30],
+                    iconAnchor: [12, 30],
+                    popupAnchor: [0, -32],
+                    // Clear of the pin's head, so the label does not sit on
+                    // top of the icon it belongs to.
+                    tooltipAnchor: [0, -34]
+                })
+            } else if (isCustom && !isCave) {
                 icon = new ImageIcon({
                     iconUrl: 'gfx/terobjs/mm/custom.png',
                     iconSize: [21, 23],
@@ -55,7 +79,6 @@ export class Marker {
                     tooltipAnchor: [1, 3]
                 })
             } else {
-                let zoom = HnHMaxZoom - this.view.getZoom();
                 let url = `${this.image}.png`;
                 if (isCave)
                     url = 'gfx/hud/mmap/cave.png';
@@ -64,24 +87,8 @@ export class Marker {
 
             let position = this.view.unproject([this.position.x, this.position.y], HnHMaxZoom);
             this.marker = L.marker(position, {icon: icon, riseOnHover: true/*, title: this.name*/});
-            let col = "#FFF";
-            if (this.type === "quest") {
-                col = "#FDB800";
-            } else if (this.type === "thingwall") {
-                col = "#00cffd";
-            }
             this.marker.marker = this;
-            this.marker.bindTooltip("<div style='color:" + col + ";'><b>" + this.name + "</b></div>", {
-                permanent: false,
-                direction: 'top',
-                sticky: true,
-                opacity: 0.9
-            });
-            this.marker.on('mouseout', function (ev) {
-                if (ev.target.marker.tstate) {
-                    ev.target.openTooltip();
-                }
-            });
+            this.applyTooltip();
             // this.marker.bindPopup(this.name);
             // this.marker.on('mouseover', function(ev) {
             //     ev.target.openPopup();
@@ -95,33 +102,80 @@ export class Marker {
         }
     }
 
+    // A refresh brings the marker's own data back from the server. It was never
+    // implemented, so the update callback threw on every marker already on the
+    // map — harmless while markers were fetched exactly once at startup, fatal
+    // the moment anything asks for them again.
+    update(mapview, updated) {
+        const redraw = this.image !== updated.image ||
+            this.name !== updated.name ||
+            this.hidden !== updated.hidden ||
+            this.position.x !== updated.position.x ||
+            this.position.y !== updated.position.y;
+
+        this.name = updated.name;
+        this.text = updated.name;
+        this.image = updated.image;
+        this.type = detectType(this.image, this.name);
+        this.hidden = updated.hidden;
+        this.showName = updated.showName === true;
+        this.position = updated.position;
+        this.map = updated.map;
+
+        // Icon, label and position are all baked in when the marker is drawn,
+        // so anything that moves or renames it is redrawn rather than patched.
+        if (redraw && this.marker) {
+            this.remove(mapview);
+        }
+    }
+
+    // Leaflet closes every tooltip that is not permanent when the map is
+    // clicked, so a name meant to stay on the map cannot simply be opened by
+    // hand — it has to be bound as permanent. That flag is fixed at bind time,
+    // which is why switching a label on or off rebinds the tooltip.
+    applyTooltip() {
+        if (!this.marker) {
+            return;
+        }
+        let col = "#FFF";
+        if (this.type === "quest") {
+            col = "#FDB800";
+        } else if (this.type === "thingwall") {
+            col = "#00cffd";
+        } else if (this.type === "waypoint") {
+            col = "#FFD24A";
+        }
+        this.marker.unbindTooltip();
+        this.marker.bindTooltip("<div style='color:" + col + ";'><b>" + this.name + "</b></div>", {
+            permanent: this.tstate,
+            direction: 'top',
+            // Sticky makes a tooltip follow the cursor, which only means
+            // anything while hovering, and Leaflet ignores the icon's anchor
+            // whenever it is set — which would drop a pin's label onto the pin.
+            sticky: !this.tstate && this.type !== "waypoint",
+            opacity: 0.9
+        });
+    }
+
     tooltipState(value) {
         this.tstate = value;
     }
 
     bindTooltip() {
         this.tstate = true;
-        if (this.marker) {
-            this.marker.openTooltip();
-        }
+        this.applyTooltip();
     }
 
     unbindTooltip() {
         this.tstate = false;
-        if (this.marker) {
-            this.marker.closeTooltip();
-        }
+        this.applyTooltip();
     }
 
     tooltip(value) {
-        try {
-            console.log(this.name + " " + value);
-            if (value)
-                this.bindTooltip();
-            else
-                this.unbindTooltip();
-        } catch (e) {
-            console.log(e);
+        if (value) {
+            this.bindTooltip();
+        } else {
+            this.unbindTooltip();
         }
     }
 

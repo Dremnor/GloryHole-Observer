@@ -4,7 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -55,14 +58,30 @@ func (m *Map) index(rw http.ResponseWriter, req *http.Request) {
 
 func (m *Map) login(rw http.ResponseWriter, req *http.Request) {
 	if req.Method == "POST" {
+		key := clientAddr(req, *trustProxyHeaders)
+		if !m.loginLimit.allowed(key) {
+			log.Printf("login: too many failed attempts from %s, refusing", key)
+			rw.Header().Set("Retry-After", strconv.Itoa(int(loginWindow.Seconds())))
+			http.Error(rw, "Too many failed login attempts. Try again later.", http.StatusTooManyRequests)
+			return
+		}
 		u := m.getUser(req.FormValue("user"), req.FormValue("pass"))
-		if u != nil {
+		if u == nil {
+			m.loginLimit.recordFailure(key)
+		} else {
+			m.loginLimit.recordSuccess(key)
 			session := make([]byte, 32)
 			rand.Read(session)
 			http.SetCookie(rw, &http.Cookie{
 				Name:    "session",
 				Expires: time.Now().Add(time.Hour * 24 * 7),
 				Value:   hex.EncodeToString(session),
+				Path:    "/",
+				// HttpOnly keeps the session out of reach of page scripts;
+				// SameSite=Lax stops other sites from riding it.
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+				Secure:   requestIsHTTPS(req),
 			})
 			s := &Session{
 				ID:        hex.EncodeToString(session),
@@ -91,6 +110,9 @@ func (m *Map) logout(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (m *Map) generateToken(rw http.ResponseWriter, req *http.Request) {
+	if !requirePOST(rw, req) {
+		return
+	}
 	s := m.getSession(req)
 	if s == nil || !s.Auths.Has(AUTH_UPLOAD) {
 		http.Redirect(rw, req, "/", 302)
@@ -142,34 +164,64 @@ func (m *Map) changePassword(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	render := func(msg string) {
+		m.ExecuteTemplate(rw, "password.tmpl", struct {
+			Page    Page
+			Session *Session
+			Error   string
+		}{
+			Page:    m.getPage(req),
+			Session: s,
+			Error:   msg,
+		})
+	}
+
 	if req.Method == "POST" {
 		req.ParseForm()
 		password := req.FormValue("pass")
-		m.db.Update(func(tx *bbolt.Tx) error {
+		if password == "" {
+			render("New password must not be empty.")
+			return
+		}
+		// Requiring the current password is what stops a stolen session, or a
+		// cross-site POST, from turning into an account takeover.
+		if m.getUser(s.Username, req.FormValue("current")) == nil {
+			render("Current password is incorrect.")
+			return
+		}
+
+		err := m.db.Update(func(tx *bbolt.Tx) error {
 			users, err := tx.CreateBucketIfNotExists([]byte("users"))
 			if err != nil {
 				return err
 			}
-			u := User{}
 			raw := users.Get([]byte(s.Username))
-			if raw != nil {
-				json.Unmarshal(raw, &u)
+			if raw == nil {
+				// Previously this created a fresh user with no roles at all.
+				return fmt.Errorf("user %q no longer exists", s.Username)
 			}
-			if password != "" {
-				u.Pass, _ = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			u := User{}
+			if err := json.Unmarshal(raw, &u); err != nil {
+				return err
 			}
-			raw, _ = json.Marshal(u)
-			users.Put([]byte(s.Username), raw)
-			return nil
+			u.Pass, err = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			if err != nil {
+				return err
+			}
+			raw, err = json.Marshal(u)
+			if err != nil {
+				return err
+			}
+			return users.Put([]byte(s.Username), raw)
 		})
+		if err != nil {
+			log.Println("changePassword:", err)
+			render("Could not change the password.")
+			return
+		}
 		http.Redirect(rw, req, "/", 302)
+		return
 	}
 
-	m.ExecuteTemplate(rw, "password.tmpl", struct {
-		Page    Page
-		Session *Session
-	}{
-		Page:    m.getPage(req),
-		Session: s,
-	})
+	render("")
 }
