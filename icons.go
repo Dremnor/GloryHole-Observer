@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.etcd.io/bbolt"
@@ -68,13 +69,52 @@ const (
 )
 
 type IconEntry struct {
-	Key     string
-	Source  IconSource
-	Markers int
+	Key    string
+	Source IconSource
+	// Markers is every marker stored against this image; OnMap is the subset
+	// the map can actually draw. They differ more often than one would guess,
+	// which is why both are shown.
+	Markers       int
+	OnMap         int
+	HiddenMarkers int
+	NoGrid        int
+	MapIDs        []int
 }
 
 func (e IconEntry) Missing() bool { return e.Source == IconMissing }
 func (e IconEntry) Custom() bool  { return e.Source == IconCustom }
+
+// Unplaced counts markers stored against a grid this server has no record of.
+// There is nowhere to draw them: a marker's position is relative to its grid,
+// so without the grid there is no position to put it at.
+func (e IconEntry) Unplaced() int { return e.NoGrid }
+
+// Note explains a row whose stored count is not what the map shows. Empty when
+// every marker with this image is drawn, which is the ordinary case.
+func (e IconEntry) Note() string {
+	parts := []string{}
+	if e.NoGrid > 0 {
+		parts = append(parts, fmt.Sprintf("%d on a grid this server does not know", e.NoGrid))
+	}
+	if e.HiddenMarkers > 0 {
+		parts = append(parts, fmt.Sprintf("%d hidden by an admin", e.HiddenMarkers))
+	}
+	// Naming a single map on every row would be noise: which map is the one
+	// being looked at is the viewer's business, not the server's. Markers of
+	// one kind split across maps is the case worth pointing at, because only
+	// the map on screen draws them.
+	if len(e.MapIDs) > 1 {
+		ids := make([]string, len(e.MapIDs))
+		for i, id := range e.MapIDs {
+			ids[i] = strconv.Itoa(id)
+		}
+		parts = append(parts, "spread over maps "+strings.Join(ids, ", "))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "; ")
+}
 
 // iconFilePath resolves the file currently serving key, preferring an upload
 // over the image shipped with the build. ok is false when neither exists.
@@ -105,9 +145,31 @@ func (m *Map) iconSource(key string) IconSource {
 	return IconMissing
 }
 
-// markerImageCounts tallies how many markers use each image key.
-func (m *Map) markerImageCounts() map[string]int {
-	counts := map[string]int{}
+// markerStat answers the question the plain count could not: the icon page
+// says there are five of these, so why is the map empty? A marker is stored
+// against the grid it sits on and only gets a position once that grid is known
+// here, so the number stored is not the number anyone can see.
+type markerStat struct {
+	Stored int
+	OnMap  int
+	Hidden int
+	NoGrid int
+	maps   map[int]bool
+}
+
+func (s *markerStat) mapIDs() []int {
+	ids := make([]int, 0, len(s.maps))
+	for id := range s.maps {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+// markerImageStats tallies, per image key, how many markers use it and how many
+// of those the map can actually draw.
+func (m *Map) markerImageStats() map[string]*markerStat {
+	stats := map[string]*markerStat{}
 	m.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte("markers"))
 		if b == nil {
@@ -117,16 +179,36 @@ func (m *Map) markerImageCounts() map[string]int {
 		if grid == nil {
 			return nil
 		}
+		grids := tx.Bucket([]byte("grids"))
 		return grid.ForEach(func(k, v []byte) error {
 			mk := Marker{}
 			if json.Unmarshal(v, &mk) != nil || mk.Image == "" {
 				return nil
 			}
-			counts[mk.Image]++
+			st := stats[mk.Image]
+			if st == nil {
+				st = &markerStat{maps: map[int]bool{}}
+				stats[mk.Image] = st
+			}
+			st.Stored++
+			switch {
+			case grids == nil || grids.Get([]byte(mk.GridID)) == nil:
+				// getMarkers cannot give this one a position, so it is counted
+				// here and drawn nowhere.
+				st.NoGrid++
+			case mk.Hidden:
+				st.Hidden++
+			default:
+				st.OnMap++
+				g := GridData{}
+				if json.Unmarshal(grids.Get([]byte(mk.GridID)), &g) == nil {
+					st.maps[g.Map] = true
+				}
+			}
 			return nil
 		})
 	})
-	return counts
+	return stats
 }
 
 // uploadedIconKeys lists overrides already on disk, so icons uploaded for a key
@@ -152,28 +234,56 @@ func (m *Map) uploadedIconKeys() []string {
 }
 
 // iconEntries is everything the admin page lists: every image key markers refer
-// to, plus any override on disk that nothing currently uses.
-func (m *Map) iconEntries() []IconEntry {
-	counts := m.markerImageCounts()
+// to, plus any override on disk that nothing currently uses. multiMap widens the
+// note on each row to name the maps a key's markers live on, which is only worth
+// saying when there is more than one map to be on.
+func (m *Map) iconEntries(multiMap bool) []IconEntry {
+	stats := m.markerImageStats()
 	seen := map[string]bool{}
 	entries := []IconEntry{}
 
-	add := func(key string, n int) {
+	add := func(key string, st *markerStat) {
 		if seen[key] || !iconKeyOK(key) {
 			return
 		}
 		seen[key] = true
-		entries = append(entries, IconEntry{Key: key, Source: m.iconSource(key), Markers: n})
+		e := IconEntry{Key: key, Source: m.iconSource(key)}
+		if st != nil {
+			e.Markers = st.Stored
+			e.OnMap = st.OnMap
+			e.HiddenMarkers = st.Hidden
+			e.NoGrid = st.NoGrid
+			if multiMap {
+				e.MapIDs = st.mapIDs()
+			}
+		}
+		entries = append(entries, e)
 	}
-	for key, n := range counts {
-		add(key, n)
+	for key, st := range stats {
+		add(key, st)
 	}
 	for _, key := range m.uploadedIconKeys() {
-		add(key, counts[key])
+		add(key, stats[key])
 	}
 
 	sortEntries(entries, listingRank)
 	return entries
+}
+
+// mapCount is how many maps the server currently holds.
+func (m *Map) mapCount() int {
+	n := 0
+	m.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte("maps"))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			n++
+			return nil
+		})
+	})
+	return n
 }
 
 // listingRank puts what needs attention first: images with no icon at all, then
@@ -196,26 +306,29 @@ func (m *Map) adminIcons(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	entries := m.iconEntries()
-	missing := 0
+	entries := m.iconEntries(m.mapCount() > 1)
+	missing, unplaced := 0, 0
 	for _, e := range entries {
 		if e.Missing() {
 			missing++
 		}
+		unplaced += e.Unplaced()
 	}
 
 	m.ExecuteTemplate(rw, filepath.FromSlash("admin/icons.tmpl"), struct {
-		Page    Page
-		Session *Session
-		Icons   []IconEntry
-		Missing int
-		Error   string
+		Page     Page
+		Session  *Session
+		Icons    []IconEntry
+		Missing  int
+		Unplaced int
+		Error    string
 	}{
-		Page:    m.getPage(req),
-		Session: s,
-		Icons:   entries,
-		Missing: missing,
-		Error:   req.FormValue("error"),
+		Page:     m.getPage(req),
+		Session:  s,
+		Icons:    entries,
+		Missing:  missing,
+		Unplaced: unplaced,
+		Error:    req.FormValue("error"),
 	})
 }
 
@@ -349,7 +462,7 @@ func (m *Map) exportIcons(rw http.ResponseWriter, req *http.Request) {
 	zw := zip.NewWriter(rw)
 	defer zw.Close()
 
-	for _, e := range m.iconEntries() {
+	for _, e := range m.iconEntries(false) {
 		src, ok := m.iconFilePath(e.Key)
 		if !ok {
 			continue

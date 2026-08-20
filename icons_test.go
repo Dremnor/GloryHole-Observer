@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.etcd.io/bbolt"
 )
 
 func TestIconKeyAcceptsRealMarkerPaths(t *testing.T) {
@@ -181,5 +184,128 @@ func TestIconFilePathPrefersTheUpload(t *testing.T) {
 	got, ok := m.iconFilePath(key)
 	if !ok || got != custom {
 		t.Errorf("iconFilePath = (%q, %v), want the uploaded file %q", got, ok, custom)
+	}
+}
+
+// newTestMap opens a Map backed by a scratch database, for the handful of tests
+// that need real buckets rather than pure helpers.
+func newTestMap(t *testing.T) *Map {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := bbolt.Open(filepath.Join(dir, "grids.db"), 0600, nil)
+	if err != nil {
+		t.Fatalf("opening the test database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return &Map{db: db, gridStorage: dir}
+}
+
+func putGrid(t *testing.T, m *Map, id string, mapID, x, y int) {
+	t.Helper()
+	err := m.db.Update(func(tx *bbolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte("grids"))
+		if err != nil {
+			return err
+		}
+		raw, err := json.Marshal(GridData{ID: id, Map: mapID, Coord: Coord{X: x, Y: y}})
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(id), raw)
+	})
+	if err != nil {
+		t.Fatalf("storing grid %q: %v", id, err)
+	}
+}
+
+func putMarker(t *testing.T, m *Map, key string, mk Marker) {
+	t.Helper()
+	err := m.db.Update(func(tx *bbolt.Tx) error {
+		mb, err := tx.CreateBucketIfNotExists([]byte("markers"))
+		if err != nil {
+			return err
+		}
+		g, err := mb.CreateBucketIfNotExists([]byte("grid"))
+		if err != nil {
+			return err
+		}
+		raw, err := json.Marshal(mk)
+		if err != nil {
+			return err
+		}
+		return g.Put([]byte(key), raw)
+	})
+	if err != nil {
+		t.Fatalf("storing marker %q: %v", key, err)
+	}
+}
+
+// A marker is stored against the grid it sits on and only gets a position once
+// that grid is known here, so counting stored markers told an admin the map was
+// showing five of something when it was showing none.
+func TestMarkerImageStatsSeparatesWhatTheMapCanDraw(t *testing.T) {
+	m := newTestMap(t)
+	putGrid(t, m, "known", 2, 0, 0)
+	putGrid(t, m, "far", 3, 40, 40)
+
+	const img = "gfx/terobjs/mm/tarpit"
+	putMarker(t, m, "known_1_1", Marker{Name: "A", GridID: "known", Image: img})
+	putMarker(t, m, "known_2_2", Marker{Name: "B", GridID: "known", Image: img, Hidden: true})
+	putMarker(t, m, "gone_3_3", Marker{Name: "C", GridID: "gone", Image: img})
+	putMarker(t, m, "far_4_4", Marker{Name: "D", GridID: "far", Image: img})
+	putMarker(t, m, "known_5_5", Marker{Name: "E", GridID: "known", Image: "gfx/terobjs/mm/geyser"})
+
+	stats := m.markerImageStats()
+	st := stats[img]
+	if st == nil {
+		t.Fatal("no stats for the image every marker but one carries")
+	}
+	if st.Stored != 4 || st.OnMap != 2 || st.Hidden != 1 || st.NoGrid != 1 {
+		t.Errorf("stats = %+v, want 4 stored, 2 on the map, 1 hidden, 1 without a grid", *st)
+	}
+	if got := st.mapIDs(); len(got) != 2 || got[0] != 2 || got[1] != 3 {
+		t.Errorf("mapIDs = %v, want the two maps its drawable markers are on", got)
+	}
+	if other := stats["gfx/terobjs/mm/geyser"]; other == nil || other.Stored != 1 || other.OnMap != 1 {
+		t.Errorf("the second image should be counted on its own, got %+v", other)
+	}
+}
+
+// The row is only worth annotating when the stored count is not what the map
+// shows, so an ordinary key stays quiet.
+func TestIconEntryNoteOnlySpeaksUpWhenSomethingIsOff(t *testing.T) {
+	if note := (IconEntry{Markers: 3, OnMap: 3}).Note(); note != "" {
+		t.Errorf("a fully drawn key should carry no note, got %q", note)
+	}
+	// One map is the ordinary case and naming it on every row would be noise.
+	if note := (IconEntry{Markers: 3, OnMap: 3, MapIDs: []int{2}}).Note(); note != "" {
+		t.Errorf("a key whose markers all sit on one map should carry no note, got %q", note)
+	}
+	note := (IconEntry{Markers: 4, OnMap: 2, HiddenMarkers: 1, NoGrid: 1, MapIDs: []int{2, 3}}).Note()
+	for _, want := range []string{"1 on a grid this server does not know", "1 hidden by an admin", "maps 2, 3"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note %q does not mention %q", note, want)
+		}
+	}
+}
+
+// Everything the icon page counts but cannot draw is worth one number at the
+// top of the page, so the admin does not have to spot it row by row.
+func TestIconEntriesReportsUnplacedMarkers(t *testing.T) {
+	m := newTestMap(t)
+	putGrid(t, m, "known", 2, 0, 0)
+	putMarker(t, m, "known_1_1", Marker{GridID: "known", Image: "gfx/terobjs/mm/tarpit"})
+	putMarker(t, m, "gone_1_1", Marker{GridID: "gone", Image: "gfx/terobjs/mm/tarpit"})
+	putMarker(t, m, "gone_2_2", Marker{GridID: "gone", Image: "gfx/terobjs/mm/geyser"})
+
+	unplaced := 0
+	for _, e := range m.iconEntries(false) {
+		unplaced += e.Unplaced()
+		if len(e.MapIDs) != 0 {
+			t.Errorf("%s: map ids belong on the page only when there is more than one map", e.Key)
+		}
+	}
+	if unplaced != 2 {
+		t.Errorf("unplaced total = %d, want 2", unplaced)
 	}
 }

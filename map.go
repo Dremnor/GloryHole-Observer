@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -48,6 +49,7 @@ func (m *Map) getMarkers(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	markers := []FrontendMarker{}
+	unplaced, firstUnplaced := 0, ""
 	m.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte("markers"))
 		if b == nil {
@@ -66,6 +68,14 @@ func (m *Map) getMarkers(rw http.ResponseWriter, req *http.Request) {
 			json.Unmarshal(v, &m)
 			graw := grids.Get([]byte(m.GridID))
 			if graw == nil {
+				// The marker's position is relative to its grid, so without the
+				// grid there is nowhere to put it. Dropping it silently is how a
+				// marker type can be counted in the admin icon list and be
+				// nowhere on the map, with nothing anywhere saying why.
+				unplaced++
+				if firstUnplaced == "" {
+					firstUnplaced = m.Image
+				}
 				return nil
 			}
 			g := GridData{}
@@ -85,6 +95,10 @@ func (m *Map) getMarkers(rw http.ResponseWriter, req *http.Request) {
 			return nil
 		})
 	})
+	if unplaced > 0 && markerLog.allow("unplaced") {
+		log.Printf("markers: %d of %d not sent, stored against a grid this server has no record of (first: %s)",
+			unplaced, unplaced+len(markers), firstUnplaced)
+	}
 	json.NewEncoder(rw).Encode(markers)
 }
 

@@ -13,6 +13,7 @@
 			.icon-form { display: flex; align-items: center; gap: 8px; margin: 0; }
 			.icon-form input[type=file] { max-width: 220px; }
 			table.icons td { padding: 8px; vertical-align: middle; }
+			.marker-note { font-size: 11px; line-height: 1.3; max-width: 190px; }
 		</style>
 		<title>{{.Page.Title}} - Marker icons</title>
 	</head>
@@ -36,6 +37,17 @@
 			<div class="card-panel orange lighten-4">
 				<b>{{.Missing}}</b> image{{if ne .Missing 1}}s have{{else}} has{{end}} no icon.
 				Those markers show a placeholder on the map until one is uploaded.
+			</div>
+			{{end}}
+
+			{{if .Unplaced}}
+			<div class="card-panel orange lighten-4">
+				<b>{{.Unplaced}}</b> marker{{if ne .Unplaced 1}}s are{{else}} is{{end}} stored against a
+				grid this server has no record of. A marker&#39;s position is relative to its
+				grid, so there is nowhere to draw {{if ne .Unplaced 1}}them{{else}}it{{end}} —
+				{{if ne .Unplaced 1}}they are{{else}}it is{{end}} counted below but not on the map.
+				Rescanning that part of the world in game puts the grid back and the marker
+				reappears on its own.
 			</div>
 			{{end}}
 
@@ -66,7 +78,10 @@
 							{{else if .Custom}}<span class="green-text text-darken-2">uploaded</span>
 							{{else}}<span class="grey-text">built in</span>{{end}}
 						</td>
-						<td>{{.Markers}}</td>
+						<td>
+							{{.Markers}}
+							{{with .Note}}<div class="marker-note grey-text text-darken-1">{{.}}</div>{{end}}
+						</td>
 						<td>
 							{{if .Missing}}
 								<span class="grey-text">&mdash;</span>

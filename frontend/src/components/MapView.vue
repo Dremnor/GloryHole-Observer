@@ -97,6 +97,17 @@
               <v-btn x-small text @click="showAllCategories">all</v-btn>
               <v-btn x-small text @click="hideAllCategories">none</v-btn>
             </div>
+            <!-- The picker only says how many types are on, so a type switched
+                 off months ago reads as a marker that stopped working. Name
+                 them, and make each one a click away from coming back. -->
+            <div v-if="hiddenCategoryChips.length" class="hidden-cats">
+              <span class="hidden-cats-label">Hidden:</span>
+              <v-chip v-for="name in hiddenCategoryChips" :key="name"
+                      x-small class="hidden-cat" close close-icon="mdi-eye"
+                      @click:close="toggleCategory(name)" @click="toggleCategory(name)">
+                {{ name }}
+              </v-chip>
+            </div>
           </template>
 
           <v-switch v-model="showThingwalls" dense inset hide-details
@@ -364,6 +375,13 @@ export default {
     },
     waypointOverflow() {
       return this.waypointMatches.length > this.waypointItems.length;
+    },
+    // Only the ones that exist right now: a stored preference for a type with
+    // no markers on this server is nothing the viewer can act on.
+    hiddenCategoryChips() {
+      return this.markerCategories
+          .map(c => c.name)
+          .filter(name => this.hiddenCategories.indexOf(name) !== -1);
     },
     // The panel offers the types that are shown while the stored preference is
     // the set that is hidden, so that a type appearing later is visible by
@@ -742,10 +760,18 @@ export default {
           this.otherMarks.push(it);
       });
 
+      // Counted over every marker rather than over the search list above, which
+      // drops the nameless ones. A marker with no name still draws, so leaving
+      // it out undercounted its type — and a type whose markers are all
+      // nameless had no checkbox at all, which made it impossible to switch
+      // back on once it had been hidden.
       // Thingwalls and quest givers are left out: they have their own switches
       // above, and listing them twice would give two controls for one thing.
       const counts = {};
-      this.otherMarks.forEach(it => {
+      this.markers.getElements().forEach(it => {
+        if (it.hidden || it.type === "thingwall" || it.type === "quest") {
+          return;
+        }
         counts[it.type] = (counts[it.type] || 0) + 1;
       });
       // text and value are what the type picker searches and stores.
@@ -1187,6 +1213,25 @@ export default {
 
 .cat-summary {
   font-size: 13px;
+}
+
+.hidden-cats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.hidden-cats-label {
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  opacity: .6;
+}
+
+.hidden-cat {
+  cursor: pointer;
 }
 
 .wp-form {

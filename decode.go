@@ -202,3 +202,7 @@ func (l *logThrottle) allow(key string) bool {
 // sent. One line a minute per endpoint and user is enough to notice a client
 // sending something this server cannot read.
 var uploadLog = newLogThrottle(time.Minute)
+
+// markerLog throttles the "these markers have nowhere to go" line, which would
+// otherwise repeat on every poll from every open map.
+var markerLog = newLogThrottle(10 * time.Minute)
